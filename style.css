@@ -1,0 +1,404 @@
+/* Global Styles */
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2980b9;
+    --success-color: #2ecc71;
+    --danger-color: #e74c3c;
+    --warning-color: #f39c12;
+    --light-color: #ecf0f1;
+    --dark-color: #2c3e50;
+    --gray-color: #7f8c8d;
+    --buy-color: #27ae60;
+    --sell-color: #c0392b;
+    --hold-color: #f39c12;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    background-color: #f5f7fa;
+    color: #333;
+}
+
+/* Container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Header */
+header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+}
+
+h1 {
+    color: var(--dark-color);
+    margin-bottom: 10px;
+}
+
+h2 {
+    color: var(--dark-color);
+    margin-bottom: 15px;
+    font-size: 1.3rem;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: center;
+}
+
+.symbol-controls {
+    display: flex;
+    gap: 5px;
+}
+
+/* Dashboard */
+.dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+/* Card */
+.card {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+/* Account section */
+#account-section {
+    grid-column: span 2;
+}
+
+/* Orders section */
+#orders-section {
+    grid-column: span 2;
+}
+
+/* Signals section */
+#signals-section {
+    grid-column: span 2;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+}
+
+th {
+    background-color: #f8f9fa;
+    text-align: left;
+    padding: 12px 15px;
+    border-bottom: 1px solid #ddd;
+    font-weight: 600;
+}
+
+td {
+    padding: 10px 15px;
+    border-bottom: 1px solid #eee;
+}
+
+tr:hover {
+    background-color: #f8f9fa;
+}
+
+/* Buy/Sell/Hold */
+.buy, .positive {
+    color: var(--buy-color);
+    font-weight: 600;
+}
+
+.sell, .negative {
+    color: var(--sell-color);
+    font-weight: 600;
+}
+
+.hold {
+    color: var(--hold-color);
+    font-weight: 600;
+}
+
+/* Buttons */
+button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    background-color: var(--primary-color);
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+button:hover {
+    background-color: var(--secondary-color);
+}
+
+#edit-risk-btn {
+    margin-top: 10px;
+}
+
+/* Inputs */
+input[type="text"], input[type="number"] {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    min-width: 200px;
+}
+
+input[type="text"]:focus, input[type="number"]:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+/* Ticker list */
+.ticker-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.ticker-item {
+    background-color: #f0f8ff;
+    padding: 5px 10px;
+    border-radius: 4px;
+    border: 1px solid #d6eaff;
+}
+
+/* Basket styles */
+.baskets-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.basket-item {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #eee;
+    padding: 15px;
+    transition: box-shadow 0.2s;
+}
+
+.basket-item:hover {
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+}
+
+.basket-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.basket-header h3 {
+    margin: 0;
+    color: var(--dark-color);
+    font-size: 1.1rem;
+}
+
+.basket-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.basket-actions button {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.trade-basket-btn {
+    background-color: var(--success-color);
+}
+
+.trade-basket-btn:hover {
+    background-color: #27ae60;
+}
+
+.edit-basket-btn {
+    background-color: var(--warning-color);
+}
+
+.edit-basket-btn:hover {
+    background-color: #e67e22;
+}
+
+.delete-basket-btn {
+    background-color: var(--danger-color);
+}
+
+.delete-basket-btn:hover {
+    background-color: #c0392b;
+}
+
+.basket-details {
+    display: flex;
+    justify-content: space-between;
+    color: var(--gray-color);
+    font-size: 0.8rem;
+    margin: 10px 0;
+}
+
+.basket-symbols {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+/* Modal styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+
+.modal-backdrop {
+    display: none;
+    position: fixed;
+    z-index: 999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+}
+
+.modal-content {
+    background-color: white;
+    margin: 10% auto;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    max-width: 500px;
+    position: relative;
+}
+
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    position: absolute;
+    top: 10px;
+    right: 15px;
+}
+
+.close:hover,
+.close:focus {
+    color: black;
+    text-decoration: none;
+}
+
+textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-family: inherit;
+    resize: vertical;
+    font-size: 14px;
+}
+
+textarea:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+/* Risk form */
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+}
+
+.form-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+#cancel-risk-edit {
+    background-color: var(--gray-color);
+}
+
+#cancel-risk-edit:hover {
+    background-color: #6a7778;
+}
+
+/* Error message */
+.error {
+    color: var(--danger-color);
+    padding: 10px;
+    border-radius: 4px;
+    background-color: rgba(231, 76, 60, 0.1);
+    border-left: 3px solid var(--danger-color);
+}
+
+/* Reasoning text */
+.reasoning {
+    max-width: 300px;
+    white-space: normal;
+    font-size: 0.85rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+    
+    #account-section, #orders-section, #signals-section {
+        grid-column: span 1;
+    }
+    
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .controls {
+        margin-top: 15px;
+        width: 100%;
+    }
+    
+    .symbol-controls {
+        width: 100%;
+    }
+    
+    input[type="text"] {
+        flex-grow: 1;
+    }
+}

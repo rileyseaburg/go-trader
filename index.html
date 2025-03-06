@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Trader Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Go Trader Dashboard</h1>
+            <div class="controls">
+                <button id="refresh-btn">Refresh Data</button>
+                <div class="symbol-controls">
+                    <input type="text" id="symbol-input" placeholder="Add symbol (e.g., AAPL)">
+                    <button id="add-symbol-btn">Add</button>
+                </div>
+            </div>
+        </header>
+
+        <div class="dashboard">
+            <section class="card" id="account-section">
+                <h2>Account Information</h2>
+                <div id="account-data">Loading...</div>
+            </section>
+
+            <section class="card" id="positions-section">
+                <h2>Open Positions</h2>
+                <div id="positions-data">Loading...</div>
+            </section>
+
+            <section class="card" id="orders-section">
+                <h2>Recent Orders</h2>
+                <div id="orders-data">Loading...</div>
+            </section>
+
+            <section class="card" id="tickers-section">
+                <h2>Active Tickers</h2>
+                <div id="tickers-data">Loading...</div>
+            </section>
+
+            <section class="card" id="baskets-section">
+                <h2>Ticker Baskets</h2>
+                <div id="baskets-data">Loading...</div>
+                <div class="form-buttons">
+                    <button id="create-basket-btn">Create New Basket</button>
+                </div>
+            </section>
+
+            <section class="card" id="signals-section">
+                <h2>Trading Signals</h2>
+                <div id="signals-data">Loading...</div>
+            </section>
+
+            <section class="card" id="risk-section">
+                <h2>Risk Parameters</h2>
+                <div id="risk-data">Loading...</div>
+                <button id="edit-risk-btn">Edit</button>
+                <div id="risk-form" style="display: none;">
+                    <form id="risk-parameters-form">
+                        <div class="form-group">
+                            <label for="maxPositionSize">Max Position Size ($):</label>
+                            <input type="number" id="maxPositionSize" name="maxPositionSize" min="0" step="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="maxTotalPositionPerc">Max Account Allocation (%):</label>
+                            <input type="number" id="maxTotalPositionPerc" name="maxTotalPositionPerc" min="0" max="1" step="0.05">
+                        </div>
+                        <div class="form-group">
+                            <label for="stopLossPerc">Stop Loss (%):</label>
+                            <input type="number" id="stopLossPerc" name="stopLossPerc" min="0" max="1" step="0.005">
+                        </div>
+                        <div class="form-group">
+                            <label for="takeProfitPerc">Take Profit (%):</label>
+                            <input type="number" id="takeProfitPerc" name="takeProfitPerc" min="0" max="1" step="0.005">
+                        </div>
+                        <div class="form-group">
+                            <label for="dailyLossLimit">Daily Loss Limit (%):</label>
+                            <input type="number" id="dailyLossLimit" name="dailyLossLimit" min="0" max="1" step="0.005">
+                        </div>
+                        <div class="form-group">
+                            <label for="maxOpenPositions">Max Open Positions:</label>
+                            <input type="number" id="maxOpenPositions" name="maxOpenPositions" min="1" step="1">
+                        </div>
+                        <div class="form-buttons">
+                            <button type="submit">Save</button>
+                            <button type="button" id="cancel-risk-edit">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+            
+            <section class="card" id="history-section">
+                <h2>Historical Data Analysis</h2>
+                <div class="form-group">
+                    <label for="history-symbol">Symbol:</label>
+                    <input type="text" id="history-symbol" placeholder="e.g., AAPL">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="history-timeframe">Time Frame:</label>
+                        <select id="history-timeframe">
+                            <option value="1Min">1 Minute</option>
+                            <option value="5Min">5 Minutes</option>
+                            <option value="15Min">15 Minutes</option>
+                            <option value="1H">1 Hour</option>
+                            <option value="1D" selected>1 Day</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="history-start">Start Date:</label>
+                        <input type="date" id="history-start">
+                    </div>
+                    <div class="form-group">
+                        <label for="history-end">End Date:</label>
+                        <input type="date" id="history-end">
+                    </div>
+                </div>
+                <div class="form-buttons">
+                    <button id="load-history-btn">Load Data</button>
+                </div>
+                <div id="history-chart-container" style="display: none;">
+                    <canvas id="history-chart"></canvas>
+                </div>
+                <div id="history-analysis" style="display: none;">
+                    <h3>Analysis</h3>
+                    <div id="history-analysis-data"></div>
+                </div>
+            </section>
+
+            <!-- Basket Creation/Edit Form (Hidden by default) -->
+            <div id="basket-modal" class="modal">
+                <div class="modal-content">
+                    <span class="close">&times;</span>
+                    <h2 id="basket-form-title">Create New Basket</h2>
+                    <form id="basket-form">
+                        <input type="hidden" id="basket-id">
+                        <div class="form-group">
+                            <label for="basket-name">Basket Name:</label>
+                            <input type="text" id="basket-name" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="basket-description">Description:</label>
+                            <textarea id="basket-description" name="description" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="basket-symbols">Symbols (comma-separated):</label>
+                            <input type="text" id="basket-symbols" name="symbols" placeholder="e.g., AAPL,MSFT,GOOG">
+                        </div>
+                        <div class="form-group">
+                            <label for="basket-tags">Tags (comma-separated):</label>
+                            <input type="text" id="basket-tags" name="tags" placeholder="e.g., tech,high-growth">
+                        </div>
+                        <div class="form-buttons">
+                            <button type="submit">Save</button>
+                            <button type="button" id="cancel-basket-edit">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div id="modal-backdrop" class="modal-backdrop"></div>
+        </div>
+    </div>
+
+    <script>
+        // API endpoints
+        const API = {
+            account: '/api/account',
+            positions: '/api/positions',
+            orders: '/api/orders',
+            tickers: '/api/tickers',
+            signals: '/api/signals',
+            baskets: '/api/baskets',
+            riskParameters: '/api/risk-parameters',
+            historical: '/api/historical'
+        };
+
+        // Format currency values
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('en-US', { 
+                style: 'currency', 
+                currency: 'USD' 
+            }).format(value);
+        }
+
+        // Format percentage values
+        function formatPercent(value) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'percent',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(value);
+        }
+
+        // Load account data
+        function loadAccountData() {
+            fetch(API.account)
+                .then(response => response.json())
+                .then(data => {
+                    const equity = parseFloat(data.Equity);
+                    const cash = parseFloat(data.Cash);
+                    const buyingPower = parseFloat(data.BuyingPower);
+                    
+                    const accountData = document.getElementById('account-data');
+                    accountData.innerHTML = `
+                        <table>
+                            <tr><td>Status:</td><td>${data.Status}</td></tr>
+                            <tr><td>Equity:</td><td>${formatCurrency(equity)}</td></tr>
+                            <tr><td>Cash:</td><td>${formatCurrency(cash)}</td></tr>
+                            <tr><td>Buying Power:</td><td>${formatCurrency(buyingPower)}</td></tr>
+                            <tr><td>Day Trading Buying Power:</td><td>${formatCurrency(parseFloat(data.DayTradeCount || 0))}</td></tr>
+                            <tr><td>Pattern Day Trader:</td><td>${data.PatternDayTrader ? 'Yes' : 'No'}</td></tr>
+                            <tr><td>Trading Blocked:</td><td>${data.TradingBlocked ? 'Yes' : 'No'}</td></tr>
+                        </table>
+                    `;
+                })
+                .catch(error => {
+                    document.getElementById('account-data').innerHTML = `<p class="error">Error loading account data: ${error.message}</p>`;
+                });
+        }
+
+        // Load positions data
+        function loadPositionsData() {
+            fetch(API.positions)
+                .then(response => response.json())
+                .then(data => {
+                    const positionsData = document.getElementById('positions-data');
+                    
+                    if (data.length === 0) {
+                        positionsData.innerHTML = '<p>No open positions</p>';
+                        return;
+                    }
+
+                    let html = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Qty</th>
+                                    <th>Avg Price</th>
+                                    <th>Current Price</th>
+                                    <th>Market Value</th>
+                                    <th>P&L</th>
+                                    <th>P&L %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    data.forEach(position => {
+                        const qty = parseFloat(position.Qty);
+                        const avgPrice = parseFloat(position.AvgEntryPrice);
+                        const currentPrice = parseFloat(position.CurrentPrice);
+                        const marketValue = parseFloat(position.MarketValue);
+                        const unrealizedPL = parseFloat(position.UnrealizedPL);
+                        const unrealizedPLPercent = parseFloat(position.UnrealizedPLPC);
+                        
+                        const plClass = unrealizedPL >= 0 ? 'positive' : 'negative';
+                        
+                        html += `
+                            <tr>
+                                <td>${position.Symbol}</td>
+                                <td>${qty}</td>
+                                <td>${formatCurrency(avgPrice)}</td>
+                                <td>${formatCurrency(currentPrice)}</td>
+                                <td>${formatCurrency(marketValue)}</td>
+                                <td class="${plClass}">${formatCurrency(unrealizedPL)}</td>
+                                <td class="${plClass}">${formatPercent(unrealizedPLPercent)}</td>
+                            </tr>
+                        `;
+                    });
+
+                    html += '</tbody></table>';
+                    positionsData.innerHTML = html;
+                })
+                .catch(error => {
+                    document.getElementById('positions-data').innerHTML = `<p class="error">Error loading positions: ${error.message}</p>`;
+                });
+        }
+
+        // Load orders data
+        function loadOrdersData() {
+            fetch(API.orders)
+                .then(response => response.json())
+                .then(data => {
+                    const ordersData = document.getElementById('orders-data');
+                    
+                    if (data.length === 0) {
+                        ordersData.innerHTML = '<p>No recent orders</p>';
+                        return;
+                    }
+
+                    let html = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Qty</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Submitted At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    // Display max 10 most recent orders
+                    const recentOrders = data.slice(0, 10);
+                    
+                    recentOrders.forEach(order => {
+                        const qty = parseFloat(order.Qty);
+                        const sideClass = order.Side === 'buy' ? 'buy' : 'sell';
+                        
+                        html += `
+                            <tr>
+                                <td>${order.Symbol}</td>
+                                <td class="${sideClass}">${order.Side}</td>
+                                <td>${qty}</td>
+                                <td>${order.Type}</td>
+                                <td>${order.Status}</td>
+                                <td>${new Date(order.SubmittedAt).toLocaleString()}</td>
+                            </tr>
+                        `;
+                    });
+
+                    html += '</tbody></table>';
+                    ordersData.innerHTML = html;
+                })
+                .catch(error => {
+                    document.getElementById('orders-data').innerHTML = `<p class="error">Error loading orders: ${error.message}</p>`;
+                });
+        }
+
+        // Load tickers data
+        function loadTickersData() {
+            fetch(API.tickers)
+                .then(response => response.json())
+                .then(data => {
+                    const tickersData = document.getElementById('tickers-data');
+                    
+                    if (!data.symbols || data.symbols.length === 0) {
+                        tickersData.innerHTML = '<p>No active tickers</p>';
+                        return;
+                    }
+
+                    let html = '<div class="ticker-list">';
+                    
+                    data.symbols.forEach(symbol => {
+                        html += `<span class="ticker-item">${symbol}</span>`;
+                    });
+
+                    html += '</div>';
+                    tickersData.innerHTML = html;
+                })
+                .catch(error => {
+                    document.getElementById('tickers-data').innerHTML = `<p class="error">Error loading tickers: ${error.message}</p>`;
+                });
+        }
+
+        // Load signals data
+        function loadSignalsData() {
+            fetch(API.signals)
+                .then(response => response.json())
+                .then(data => {
+                    const signalsData = document.getElementById('signals-data');
+                    
+                    if (Object.keys(data).length === 0) {
+                        signalsData.innerHTML = '<p>No trading signals available</p>';
+                        return;
+                    }
+
+                    let html = `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Signal</th>
+                                    <th>Order Type</th>
+                                    <th>Price</th>
+                                    <th>Time</th>
+                                    <th>Reasoning</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    // If data is an array of signals
+                    if (Array.isArray(data)) {
+                        data.forEach(renderSignalRow);
+                    } 
+                    // If data is a single signal object
+                    else if (data.Symbol) {
+                        renderSignalRow(data);
+                    } 
+                    // If data is a map of symbol -> signal
+                    else {
+                        Object.values(data).forEach(renderSignalRow);
+                    }
+
+                    function renderSignalRow(signal) {
+                        const signalClass = 
+                            signal.Signal === 'buy' ? 'buy' : 
+                            signal.Signal === 'sell' ? 'sell' : 'hold';
+                        
+                        const price = signal.LimitPrice ? 
+                            formatCurrency(signal.LimitPrice) : 
+                            (signal.Signal === 'hold' ? 'N/A' : 'Market');
+                        
+                        html += `
+                            <tr>
+                                <td>${signal.Symbol}</td>
+                                <td class="${signalClass}">${signal.Signal.toUpperCase()}</td>
+                                <td>${signal.OrderType || 'N/A'}</td>
+                                <td>${price}</td>
+                                <td>${new Date(signal.Timestamp).toLocaleString()}</td>
+                                <td class="reasoning">${signal.Reasoning}</td>
+                            </tr>
+                        `;
+                    }
+
+                    html += '</tbody></table>';
+                    signalsData.innerHTML = html;
+                })
+                .catch(error => {
+                    document.getElementById('signals-data').innerHTML = `<p class="error">Error loading signals: ${error.message}</p>`;
+                });
+        }
+
+        // Load baskets data
+        function loadBasketsData() {
+            fetch(API.baskets)
+                .then(response => response.json())
+                .then(data => {
+                    const basketsData = document.getElementById('baskets-data');
+                    
+                    if (!data || data.length === 0) {
+                        basketsData.innerHTML = '<p>No ticker baskets available</p>';
+                        return;
+                    }
+
+                    let html = '<div class="baskets-list">';
+                    
+                    data.forEach(basket => {
+                        const symbolsCount = basket.symbols ? basket.symbols.length : 0;
+                        const formattedDate = new Date(basket.updated_at).toLocaleDateString();
+                        
+                        html += `
+                            <div class="basket-item" data-id="${basket.id}">
+                                <div class="basket-header">
+                                    <h3>${basket.name}</h3>
+                                    <div class="basket-actions">
+                                        <button class="trade-basket-btn" data-id="${basket.id}">Trade</button>
+                                        <button class="edit-basket-btn" data-id="${basket.id}">Edit</button>
+                                        <button class="delete-basket-btn" data-id="${basket.id}">Delete</button>
+                                    </div>
+                                </div>
+                                <p>${basket.description || 'No description'}</p>
+                                <div class="basket-details">
+                                    <span>${symbolsCount} symbols</span>
+                                    <span>Updated: ${formattedDate}</span>
+                                </div>
+                                <div class="basket-symbols">
+                                    ${(basket.symbols || []).map(symbol => 
+                                        `<span class="ticker-item">${symbol}</span>`
+                                    ).join('')}
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    html += '</div>';
+                    basketsData.innerHTML = html;
+                    
+                    // Add event listeners for basket actions
+                    document.querySelectorAll('.trade-basket-btn').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const basketId = this.getAttribute('data-id');
+                            tradeBasket(basketId);
+                        });
+                    });
+                    
+                    document.querySelectorAll('.edit-basket-btn').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const basketId = this.getAttribute('data-id');
+                            editBasket(basketId);
+                        });
+                    });
+                    
+                    document.querySelectorAll('.delete-basket-btn').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const basketId = this.getAttribute('data-id');
+                            deleteBasket(basketId);
+                        });
+                    });
+                })
+                .catch(error => {
+                    document.getElementById('baskets-data').innerHTML = `<p class="error">Error loading baskets: ${error.message}</p>`;
+                });
+        }
+
+        // Trade all symbols in a basket
+        function tradeBasket(basketId) {
+            fetch(`${API.baskets}/trade/${basketId}`, {
+                method: 'POST'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to start trading basket');
+                }
+                return response.json();
+            })
+            .then(data => {
+                alert(`${data.message}`);
+                // Refresh data to reflect changes
+                loadTickersData();
+                loadBasketsData();
+            })
+            .catch(error => {
+                alert(`Error trading basket: ${error.message}`);
+            });
+        }
+        
+        // Delete a basket
+        function deleteBasket(basketId) {
+            if (!confirm('Are you sure you want to delete this basket?')) {
+                return;
+            }
+            
+            fetch(`${API.baskets}/${basketId}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(() => {
+                loadBasketsData();
+            })
+            .catch(error => {
+                alert(`Error deleting basket: ${error.message}`);
+            });
+        }
+
+        // Load risk parameters data
+        function loadRiskData() {
+            fetch(API.riskParameters)
+                .then(response => response.json())
+                .then(data => {
+                    const riskData = document.getElementById('risk-data');
+                    
+                    let html = `
+                        <table>
+                            <tr><td>Max Position Size:</td><td>${formatCurrency(data.maxPositionSize)}</td></tr>
+                            <tr><td>Max Account Allocation:</td><td>${formatPercent(data.maxTotalPositionPerc)}</td></tr>
+                            <tr><td>Stop Loss:</td><td>${formatPercent(data.stopLossPerc)}</td></tr>
+                            <tr><td>Take Profit:</td><td>${formatPercent(data.takeProfitPerc)}</td></tr>
+                            <tr><td>Daily Loss Limit:</td><td>${formatPercent(data.dailyLossLimit)}</td></tr>
+                            <tr><td>Max Open Positions:</td><td>${data.maxOpenPositions}</td></tr>
+                        </table>
+                    `;
+                    
+                    riskData.innerHTML = html;
+
+                    // Also fill in the form values
+                    document.getElementById('maxPositionSize').value = data.maxPositionSize;
+                    document.getElementById('maxTotalPositionPerc').value = data.maxTotalPositionPerc;
+                    document.getElementById('stopLossPerc').value = data.stopLossPerc;
+                    document.getElementById('takeProfitPerc').value = data.takeProfitPerc;
+                    document.getElementById('dailyLossLimit').value = data.dailyLossLimit;
+                    document.getElementById('maxOpenPositions').value = data.maxOpenPositions;
+                })
+                .catch(error => {
+                    document.getElementById('risk-data').innerHTML = `<p class="error">Error loading risk parameters: ${error.message}</p>`;
+                });
+        }
+
+        // Add ticker symbol
+        function addSymbol(symbol) {
+            // Get current symbols first
+            fetch(API.tickers)
+                .then(response => response.json())
+                .then(data => {
+                    const symbols = [...data.symbols];
+                    
+                    // Check if symbol already exists
+                    if (!symbols.includes(symbol)) {
+                        symbols.push(symbol);
+                        
+                        // Update symbols
+                        fetch(API.tickers, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ symbols })
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Failed to add symbol');
+                            }
+                            return response.json();
+                        })
+                        .then(() => {
+                            loadTickersData();
+                            document.getElementById('symbol-input').value = '';
+                        })
+                        .catch(error => {
+                            alert(`Error adding symbol: ${error.message}`);
+                        });
+                    } else {
+                        alert(`Symbol ${symbol} is already being tracked`);
+                    }
+                })
+                .catch(error => {
+                    alert(`Error adding symbol: ${error.message}`);
+                });
+        }
+
+        // Create a new basket
+        function createBasket() {
+            openBasketModal();
+        }
+
+        // Edit a basket
+        function editBasket(basketId) {
+            fetch(`${API.baskets}/${basketId}`)
+                .then(response => response.json())
+                .then(basket => {
+                    document.getElementById('basket-form-title').textContent = 'Edit Basket';
+                    document.getElementById('basket-id').value = basket.id;
+                    document.getElementById('basket-name').value = basket.name || '';
+                    document.getElementById('basket-description').value = basket.description || '';
+                    document.getElementById('basket-symbols').value = (basket.symbols || []).join(',');
+                    document.getElementById('basket-tags').value = (basket.tags || []).join(',');
+                    
+                    openBasketModal();
+                })
+                .catch(error => {
+                    alert(`Error loading basket details: ${error.message}`);
+                });
+        }
+
+        // Open the basket modal
+        function openBasketModal() {
+            document.getElementById('modal-backdrop').style.display = 'block';
+            document.getElementById('basket-modal').style.display = 'block';
+        }
+
+        // Close the basket modal
+        function closeBasketModal() {
+            document.getElementById('modal-backdrop').style.display = 'none';
+            document.getElementById('basket-modal').style.display = 'none';
+            document.getElementById('basket-form').reset();
+            document.getElementById('basket-form-title').textContent = 'Create New Basket';
+            document.getElementById('basket-id').value = '';
+        }
+
+        // Handle basket form submission
+        document.getElementById('basket-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const basketId = document.getElementById('basket-id').value;
+            const isEditing = basketId !== '';
+            
+            const basket = {
+                id: isEditing ? basketId : generateUUID(),
+                name: document.getElementById('basket-name').value,
+                description: document.getElementById('basket-description').value,
+                symbols: document.getElementById('basket-symbols').value.split(',').filter(s => s.trim() !== '').map(s => s.trim().toUpperCase()),
+                tags: document.getElementById('basket-tags').value.split(',').filter(t => t.trim() !== '').map(t => t.trim())
+            };
+            
+            const method = isEditing ? 'PUT' : 'POST';
+            const url = isEditing ? `${API.baskets}/${basketId}` : API.baskets;
+            
+            fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(basket)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to save basket');
+                }
+                closeBasketModal();
+                loadBasketsData();
+            })
+            .catch(error => {
+                alert(`Error saving basket: ${error.message}`);
+            });
+        });
+
+        // Historical data chart
+        let historyChart = null;
+
+        // Load historical data
+        function loadHistoricalData() {
+            const symbol = document.getElementById('history-symbol').value.trim().toUpperCase();
+            if (!symbol) {
+                alert('Please enter a symbol');
+                return;
+            }
+
+            const timeframe = document.getElementById('history-timeframe').value;
+            const startDate = document.getElementById('history-start').value;
+            const endDate = document.getElementById('history-end').value;
+
+            // Build query string
+            let query = `symbol=${symbol}&timeframe=${timeframe}&analyze=true`;
+            if (startDate) query += `&start=${startDate}`;
+            if (endDate) query += `&end=${endDate}`;
+
+            // Show loading
+            document.getElementById('history-chart-container').style.display = 'none';
+            document.getElementById('history-analysis').style.display = 'none';
+
+            // Fetch data
+            fetch(`${API.historical}?${query}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to load historical data');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    displayHistoricalAnalysis(data);
+                })
+                .catch(error => {
+                    alert(`Error loading historical data: ${error.message}`);
+                });
+        }
+
+        // Display historical data analysis
+        function displayHistoricalAnalysis(data) {
+            // Show containers
+            document.getElementById('history-chart-container').style.display = 'block';
+            document.getElementById('history-analysis').style.display = 'block';
+
+            // Create or update chart
+            createHistoryChart(data);
+
+            // Display analysis info
+            const analysisHtml = `
+                <table>
+                    <tr><td>Symbol:</td><td>${data.symbol}</td></tr>
+                    <tr><td>Period:</td><td>${new Date(data.period_start).toLocaleDateString()} to ${new Date(data.period_end).toLocaleDateString()}</td></tr>
+                    <tr><td>Data Points:</td><td>${data.data_points}</td></tr>
+                    <tr><td>Start Price:</td><td>${formatCurrency(data.start_price)}</td></tr>
+                    <tr><td>End Price:</td><td>${formatCurrency(data.end_price)}</td></tr>
+                    <tr><td>Average Price:</td><td>${formatCurrency(data.avg_price)}</td></tr>
+                    <tr><td>Highest Price:</td><td>${formatCurrency(data.highest_price)}</td></tr>
+                    <tr><td>Lowest Price:</td><td>${formatCurrency(data.lowest_price)}</td></tr>
+                    <tr><td>Price Change:</td><td class="${data.price_change >= 0 ? 'positive' : 'negative'}">${formatCurrency(data.price_change)} (${formatPercent(data.price_change_pct/100)})</td></tr>
+                    <tr><td>Average Volume:</td><td>${Math.round(data.avg_volume).toLocaleString()}</td></tr>
+                    <tr><td>Highest Volume:</td><td>${data.highest_volume.toLocaleString()}</td></tr>
+                    <tr><td>Volatility:</td><td>${Math.sqrt(data.volatility).toFixed(4)}</td></tr>
+                    <tr><td>Trend:</td><td class="${data.trend === 'upward' ? 'positive' : data.trend === 'downward' ? 'negative' : ''}">${data.trend.charAt(0).toUpperCase() + data.trend.slice(1)}</td></tr>
+                </table>
+            `;
+
+            document.getElementById('history-analysis-data').innerHTML = analysisHtml;
+        }
+
+        // Create or update history chart
+        function createHistoryChart(data) {
+            const ctx = document.getElementById('history-chart').getContext('2d');
+
+            // If chart already exists, destroy it
+            if (historyChart) {
+                historyChart.destroy();
+            }
+
+            // Fetch raw historical data for the chart
+            const symbol = document.getElementById('history-symbol').value.trim().toUpperCase();
+            const timeframe = document.getElementById('history-timeframe').value;
+            const startDate = document.getElementById('history-start').value;
+            const endDate = document.getElementById('history-end').value;
+
+            // Build query string
+            let query = `symbol=${symbol}&timeframe=${timeframe}`;
+            if (startDate) query += `&start=${startDate}`;
+            if (endDate) query += `&end=${endDate}`;
+
+            fetch(`${API.historical}?${query}`)
+                .then(response => response.json())
+                .then(historicalData => {
+                    // Prepare data for chart
+                    const labels = historicalData.data.map(point => new Date(point.timestamp).toLocaleDateString());
+                    const prices = historicalData.data.map(point => point.close);
+                    const volumes = historicalData.data.map(point => point.volume);
+
+                    // Create chart
+                    historyChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: `${symbol} Price`,
+                                data: prices,
+                                borderColor: '#3498db',
+                                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                                tension: 0.1,
+                                yAxisID: 'y'
+                            }, {
+                                label: `${symbol} Volume`,
+                                data: volumes,
+                                type: 'bar',
+                                backgroundColor: 'rgba(192, 192, 192, 0.3)',
+                                yAxisID: 'y1'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    position: 'left',
+                                    title: {
+                                        display: true,
+                                        text: 'Price'
+                                    }
+                                },
+                                y1: {
+                                    position: 'right',
+                                    grid: {
+                                        drawOnChartArea: false
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Volume'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching historical data for chart:', error);
+                });
+        }
+
+        // Toggle risk parameters form
+        document.getElementById('edit-risk-btn').addEventListener('click', function() {
+            document.getElementById('risk-data').style.display = 'none';
+            document.getElementById('risk-form').style.display = 'block';
+            document.getElementById('edit-risk-btn').style.display = 'none';
+        });
+
+        document.getElementById('cancel-risk-edit').addEventListener('click', function() {
+            document.getElementById('risk-data').style.display = 'block';
+            document.getElementById('risk-form').style.display = 'none';
+            document.getElementById('edit-risk-btn').style.display = 'inline-block';
+        });
+        
+        // Create basket button
+        document.getElementById('create-basket-btn').addEventListener('click', createBasket);
+        
+        // Cancel basket edit
+        document.getElementById('cancel-basket-edit').addEventListener('click', closeBasketModal);
+        
+        // Close modal when clicking the X or outside the modal
+        document.querySelector('.close').addEventListener('click', closeBasketModal);
+        window.addEventListener('click', function(event) {
+            if (event.target === document.getElementById('modal-backdrop')) {
+                closeBasketModal();
+            }
+        });
+
+        // Save risk parameters
+        document.getElementById('risk-parameters-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const params = {
+                maxPositionSize: parseFloat(document.getElementById('maxPositionSize').value),
+                maxTotalPositionPerc: parseFloat(document.getElementById('maxTotalPositionPerc').value),
+                stopLossPerc: parseFloat(document.getElementById('stopLossPerc').value),
+                takeProfitPerc: parseFloat(document.getElementById('takeProfitPerc').value),
+                dailyLossLimit: parseFloat(document.getElementById('dailyLossLimit').value),
+                maxOpenPositions: parseInt(document.getElementById('maxOpenPositions').value)
+            };
+            
+            fetch(API.riskParameters, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(params)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to update risk parameters');
+                }
+                return response.json();
+            })
+            .then(() => {
+                document.getElementById('risk-data').style.display = 'block';
+                document.getElementById('risk-form').style.display = 'none';
+                document.getElementById('edit-risk-btn').style.display = 'inline-block';
+                loadRiskData();
+            })
+            .catch(error => {
+                alert(`Error updating risk parameters: ${error.message}`);
+            });
+        });
+
+        // Add symbol button handler
+        document.getElementById('add-symbol-btn').addEventListener('click', function() {
+            const symbol = document.getElementById('symbol-input').value.trim().toUpperCase();
+            if (symbol) {
+                addSymbol(symbol);
+            }
+        });
+
+        // Enter key in symbol input
+        document.getElementById('symbol-input').addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') {
+                const symbol = this.value.trim().toUpperCase();
+                if (symbol) {
+                    addSymbol(symbol);
+                }
+            }
+        });
+
+        // Generate UUID for basket IDs (simplified version)
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+        
+        // Set default dates for historical data
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(today.getDate() - 30);
+            
+            document.getElementById('history-end').valueAsDate = today;
+            document.getElementById('history-start').valueAsDate = thirtyDaysAgo;
+        });
+        
+        // Load historical data button
+        document.getElementById('load-history-btn').addEventListener('click', loadHistoricalData);
+
+        // Refresh data button
+        document.getElementById('refresh-btn').addEventListener('click', loadAllData);
+
+        // Load all data
+        function loadAllData() {
+            loadAccountData();
+            loadPositionsData();
+            loadOrdersData();
+            loadTickersData();
+            loadBasketsData();
+            loadSignalsData();
+            loadRiskData();
+        }
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', loadAllData);
+        
+        // Auto refresh every 30 seconds
+        setInterval(loadAllData, 30000);
+    </script>
+</body>
+</html>
