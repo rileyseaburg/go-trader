@@ -4,13 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+
+	"github.com/rileyseaburg/go-trader/types"
 )
 
 // The functions in this file provide compatibility between the old API in algorithm.go
 // and the new implementation in history.go
 
 // GetHistoricalData provides backward compatibility with the handler API
-func (a *TradingAlgorithm) GetHistoricalData(request HistoricalDataRequest) (*HistoricalData, error) {
+func (a *TradingAlgorithm) GetHistoricalData(request types.HistoricalDataRequest) (*types.HistoricalData, error) {
 	log.Printf("GetHistoricalData: converting request for %s", request.Symbol)
 
 	// Validate request
@@ -40,11 +42,11 @@ func (a *TradingAlgorithm) GetHistoricalData(request HistoricalDataRequest) (*Hi
 
 // convertBarHistoryToHistoricalData converts from BarHistory to the algorithm's
 // expected format with Data points
-func convertBarHistoryToHistoricalData(data BarHistory) *HistoricalData {
+func convertBarHistoryToHistoricalData(data BarHistory) *types.HistoricalData {
 	// Create data points from bars
-	points := make([]HistoricalDataPoint, len(data.Bars))
+	points := make([]types.HistoricalDataPoint, len(data.Bars))
 	for i, bar := range data.Bars {
-		points[i] = HistoricalDataPoint{
+		points[i] = types.HistoricalDataPoint{
 			Symbol:    bar.Symbol,
 			Timestamp: bar.Timestamp,
 			Open:      bar.Open,
@@ -56,7 +58,7 @@ func convertBarHistoryToHistoricalData(data BarHistory) *HistoricalData {
 	}
 
 	// Return in the format expected by handlers
-	return &HistoricalData{
+	return &types.HistoricalData{
 		Symbol:    data.Symbol,
 		TimeFrame: data.TimeFrame,
 		StartDate: data.StartDate,
@@ -66,7 +68,7 @@ func convertBarHistoryToHistoricalData(data BarHistory) *HistoricalData {
 }
 
 // AnalyzeHistoricalData provides backward compatibility with the handler API
-func (a *TradingAlgorithm) AnalyzeHistoricalData(data *HistoricalData) *HistoricalDataAnalysis {
+func (a *TradingAlgorithm) AnalyzeHistoricalData(data *types.HistoricalData) *types.HistoricalDataAnalysis {
 	log.Printf("AnalyzeHistoricalData: analyzing data for %s", data.Symbol)
 
 	// Convert to BarHistory
@@ -95,7 +97,7 @@ func (a *TradingAlgorithm) AnalyzeHistoricalData(data *HistoricalData) *Historic
 	analysis := a.AnalyzeBarHistory(barHistory)
 
 	// Create the result in the old format
-	return &HistoricalDataAnalysis{
+	return &types.HistoricalDataAnalysis{
 		Symbol:    analysis.Symbol,
 		TimeFrame: analysis.TimeFrame,
 		StartDate: analysis.StartDate,

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/rileyseaburg/go-trader/types"
 )
 
 // AlgorithmHandler implements HTTP handlers for algorithm API endpoints
@@ -214,7 +216,7 @@ func (h *AlgorithmHandler) handleGetHistoricalData(w http.ResponseWriter, r *htt
 	}
 
 	// Create historical data request
-	request := HistoricalDataRequest{
+	request := types.HistoricalDataRequest{
 		Symbol:    symbol,
 		StartDate: start,
 		EndDate:   end,
@@ -298,7 +300,7 @@ func (h *AlgorithmHandler) handleAnalyzeData(w http.ResponseWriter, r *http.Requ
 	}
 
 	// First, get historical data
-	request := HistoricalDataRequest{
+	request := types.HistoricalDataRequest{
 		Symbol:    symbol,
 		StartDate: start,
 		EndDate:   end,

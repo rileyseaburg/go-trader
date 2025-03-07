@@ -30,8 +30,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// convertHistoricalDataToMarketData converts from algorithm.HistoricalData to []types.MarketData
-func convertHistoricalDataToMarketData(data *algorithm.HistoricalData) []types.MarketData {
+// convertHistoricalDataToMarketData converts from types.HistoricalData to []types.MarketData
+func convertHistoricalDataToMarketData(data *types.HistoricalData) []types.MarketData {
 	if data == nil || len(data.Data) == 0 {
 		return []types.MarketData{}
 	}
@@ -821,7 +821,7 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 			}
 
 			// Create request 
-			request := algorithm.HistoricalDataRequest{
+			request := types.HistoricalDataRequest{
 				Symbol:    symbol,
 				StartDate: startDate,
 				EndDate:   endDate,
@@ -1221,7 +1221,7 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 		}
 
 		// Get historical data
-		request := algorithm.HistoricalDataRequest{
+		request := types.HistoricalDataRequest{
 			Symbol:    req.Symbol,                     // Symbol to get data for
 			StartDate: time.Now().AddDate(0, 0, -30),  // Last 30 days
 			EndDate:   time.Now(),                     // Current time

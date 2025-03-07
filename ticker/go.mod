@@ -3,7 +3,7 @@ module github.com/rileyseaburg/go-trader/ticker
 go 1.23.4
 
 require (
-	github.com/alpacahq/alpaca-trade-api-go/v3 v3.8.0
+	github.com/alpacahq/alpaca-trade-api-go/v3 v3.8.1
 	github.com/gorilla/websocket v1.5.3
 )
 
