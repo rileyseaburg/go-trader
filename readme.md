@@ -41,41 +41,55 @@ The application consists of several key components:
    cp .env.template .env
    ```
 
-3. Edit the `.env` file with your API keys:
+3. For live Alpaca-backed operation, edit the `.env` file with your API keys:
    ```
-   # Alpaca API Keys
-   ALPACA_API_KEY=your_alpaca_api_key_here
-   ALPACA_SECRET_KEY=your_alpaca_secret_key_here
-   
-   # Claude API Key
+   PAPER_ALPACA_API_KEY=your_alpaca_api_key_here
+   PAPER_ALPACA_SECRET_KEY=your_alpaca_secret_key_here
    CLAUDE_API_KEY=your_claude_api_key_here
    ```
+
+   For local development without external credentials, either set `GO_TRADER_MOCK=true` in `.env` or run with `-mock`.
 
 4. Install dependencies:
    ```
    go mod download
+   cd web-ui && npm install
    ```
 
 ## Running the Application
 
-Start the application with:
+Start the application with real paper-trading credentials:
 
 ```
 go run main.go
 ```
 
-Or with custom options:
+Or start in safe local mock mode without credentials:
 
 ```
-go run main.go -port 8080 -symbols "AAPL,MSFT,TSLA,GOOG,AMZN" -claude-url "https://api.anthropic.com/v1/complete"
+go run main.go -mock
+```
+
+Run the web UI dev server in another terminal:
+
+```
+cd web-ui && npm run dev
+```
+
+Or with custom backend options:
+
+```
+go run main.go -port 8080 -symbols "AAPL,MSFT,TSLA,GOOG,AMZN"
 ```
 
 ### Command-line Options
 
 - `-port`: HTTP server port (default: 8080)
 - `-symbols`: Comma-separated list of ticker symbols to track (default: "AAPL,MSFT,TSLA")
-- `-claude-url`: Claude API URL (default: "https://api.anthropic.com/v1/complete")
-- `-claude-key`: Claude API key (overrides env var)
+- `-paper`: Use paper trading (default: true)
+- `-mock`: Run with deterministic mock data and no Alpaca credentials
+- `-alpaca-key`: Alpaca API key (overrides env var)
+- `-alpaca-secret`: Alpaca secret key (overrides env var)
 
 ## API Endpoints
 

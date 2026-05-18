@@ -4,19 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"os"
 	"sync"
 	"time"
-	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 
+	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 )
 
 // TickerData represents the current market data for a ticker
 type TickerData struct {
-	Symbol      string           `json:"symbol"`
+	Symbol      string            `json:"symbol"`
 	Trade       *marketdata.Trade `json:"trade"`
 	Quote       *marketdata.Quote `json:"quote"`
-	Bar         *marketdata.Bar  `json:"bar,omitempty"`
-	LastUpdated time.Time        `json:"last_updated"`
+	Bar         *marketdata.Bar   `json:"bar,omitempty"`
+	LastUpdated time.Time         `json:"last_updated"`
 }
 
 // TickerDataHandler is a function that handles ticker data
@@ -30,17 +32,20 @@ type TickerServer struct {
 	dataHandler  TickerDataHandler
 	ctx          context.Context
 	cancel       context.CancelFunc
-	
+	mockMode     bool
+
 	// Keep track of last data received
-	lastData     map[string]TickerData
-	dataMutex    sync.RWMutex
+	lastData  map[string]TickerData
+	dataMutex sync.RWMutex
 }
 
 // NewTickerServer creates a new ticker server
 func NewTickerServer(ctx context.Context, isPaperTrading bool, apiKey, apiSecret string) *TickerServer {
 	// Create child context so we can cancel it independently
 	childCtx, cancel := context.WithCancel(ctx)
-	
+
+	mockMode := os.Getenv("GO_TRADER_MOCK") == "true" || apiKey == "MOCK_ALPACA_API_KEY"
+
 	// Create market data client
 	mdClient := marketdata.NewClient(marketdata.ClientOpts{
 		APIKey:    apiKey,
@@ -48,21 +53,26 @@ func NewTickerServer(ctx context.Context, isPaperTrading bool, apiKey, apiSecret
 	})
 
 	return &TickerServer{
-		mdClient:    mdClient,
-		symbols:     []string{},
-		ctx:         childCtx,
-		cancel:      cancel,
-		lastData:    make(map[string]TickerData),
+		mdClient: mdClient,
+		symbols:  []string{},
+		ctx:      childCtx,
+		cancel:   cancel,
+		mockMode: mockMode,
+		lastData: make(map[string]TickerData),
 	}
 }
 
 // Start initializes the ticker server
 func (ts *TickerServer) Start() error {
-	log.Println("Ticker server started successfully")
-	
+	if ts.mockMode {
+		log.Println("Ticker server started in mock mode")
+	} else {
+		log.Println("Ticker server started successfully")
+	}
+
 	// Start polling for data
 	go ts.pollForData()
-	
+
 	return nil
 }
 
@@ -76,6 +86,11 @@ func (ts *TickerServer) Stop() {
 func (ts *TickerServer) pollForData() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	// Seed initial data quickly so the UI has something to display in mock mode.
+	if ts.mockMode {
+		ts.updateMarketData()
+	}
 
 	for {
 		select {
@@ -95,6 +110,11 @@ func (ts *TickerServer) updateMarketData() {
 	ts.symbolsMutex.RUnlock()
 
 	if len(symbols) == 0 {
+		return
+	}
+
+	if ts.mockMode {
+		ts.updateMockMarketData(symbols)
 		return
 	}
 
@@ -128,22 +148,54 @@ func (ts *TickerServer) updateMarketData() {
 		bars, err := ts.mdClient.GetBars(symbol, marketdata.GetBarsRequest{
 			TimeFrame: marketdata.OneMin,
 			Start:     oneHourAgo,
-			End: 	  now,
+			End:       now,
 		})
-		
+
 		if err == nil && len(bars) > 0 {
 			data.Bar = &bars[0]
 		}
 
-		// Store data
-		ts.dataMutex.Lock()
-		ts.lastData[symbol] = data
-		ts.dataMutex.Unlock()
+		ts.storeAndPublish(symbol, data)
+	}
+}
 
-		// Notify handler
-		if ts.dataHandler != nil {
-			go ts.dataHandler(symbol, data)
+func (ts *TickerServer) updateMockMarketData(symbols []string) {
+	now := time.Now()
+	for i, symbol := range symbols {
+		base := 100.0 + float64(i*25)
+		wave := math.Sin(float64(now.Unix()%3600)/180.0+float64(i)) * 2.5
+		price := base + wave
+		data := TickerData{
+			Symbol: symbol,
+			Trade: &marketdata.Trade{
+				Timestamp: now,
+				Price:     price,
+				Size:      uint32(100 + i*10),
+				Exchange:  "MOCK",
+				ID:        now.UnixNano() + int64(i),
+			},
+			Quote: &marketdata.Quote{
+				Timestamp: now,
+				BidPrice:  price - 0.01,
+				BidSize:   100,
+				AskPrice:  price + 0.01,
+				AskSize:   100,
+			},
+			LastUpdated: now,
 		}
+		ts.storeAndPublish(symbol, data)
+	}
+}
+
+func (ts *TickerServer) storeAndPublish(symbol string, data TickerData) {
+	// Store data
+	ts.dataMutex.Lock()
+	ts.lastData[symbol] = data
+	ts.dataMutex.Unlock()
+
+	// Notify handler
+	if ts.dataHandler != nil {
+		go ts.dataHandler(symbol, data)
 	}
 }
 
@@ -155,7 +207,7 @@ func (ts *TickerServer) UpdateSymbols(symbols []string) error {
 	// Update symbols list
 	ts.symbols = make([]string, len(symbols))
 	copy(ts.symbols, symbols)
-	
+
 	log.Printf("Updated ticker symbols: %v", ts.symbols)
 	return nil
 }

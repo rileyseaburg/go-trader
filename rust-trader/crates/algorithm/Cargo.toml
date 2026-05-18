@@ -1,0 +1,17 @@
+[package]
+name = "go-trader-algorithm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+go-trader-types.workspace = true
+go-trader-cartography.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+rust_decimal.workspace = true
+rust_decimal_macros.workspace = true

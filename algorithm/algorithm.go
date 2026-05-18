@@ -69,17 +69,19 @@ type ClaudeClientInterface interface {
 
 // TradingAlgorithm represents the main algorithm that processes market data and executes trades
 type TradingAlgorithm struct {
-	ctx            context.Context
-	claude         ClaudeClientInterface
-	client         *alpaca.Client
-	mdClient       *marketdata.Client
-	marketData     map[string]MarketData
-	signals        map[string]*TradeSignal
-	portfolio      PortfolioData
-	riskParameters map[string]interface{}
-	signalCB       func(*TradeSignal)
-	tradingEnabled bool
-	mu             sync.RWMutex
+	ctx              context.Context
+	claude           ClaudeClientInterface
+	client           *alpaca.Client
+	mdClient         *marketdata.Client
+	marketData       map[string]MarketData
+	signals          map[string]*TradeSignal
+	portfolio        PortfolioData
+	riskParameters   map[string]interface{}
+	signalCB         func(*TradeSignal)
+	tradingEnabled   bool
+	regimeMultiplier float64 // macro regime risk scalar — 1.0 means neutral
+	regimeName       string  // last regime name set by the cartography feeder
+	mu               sync.RWMutex
 }
 
 // NewTradingAlgorithm creates a new trading algorithm instance
@@ -101,8 +103,30 @@ func NewTradingAlgorithm(ctx context.Context, claude ClaudeClientInterface, clie
 			"take_profit_percent":       15.0, // 15% take profit
 			"max_trades_per_day":        10,   // Max 10 trades per day
 		},
-		tradingEnabled: false,
+		tradingEnabled:   false,
+		regimeMultiplier: 1.0,
 	}
+}
+
+// SetRegimeMultiplier updates the macro-regime risk scalar applied to all
+// position sizing. Values < 1 shrink risk (defensive regimes); values > 1
+// expand it (favorable regimes). Callers (typically the cartography feeder
+// in main) are expected to clamp to a sane band.
+func (a *TradingAlgorithm) SetRegimeMultiplier(name string, m float64) {
+	if m < 0 {
+		m = 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.regimeMultiplier = m
+	a.regimeName = name
+}
+
+// GetRegimeMultiplier returns the current regime name and multiplier.
+func (a *TradingAlgorithm) GetRegimeMultiplier() (string, float64) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.regimeName, a.regimeMultiplier
 }
 
 // Start initializes the trading algorithm with the given symbols
@@ -543,6 +567,17 @@ func (a *TradingAlgorithm) calculatePositionSize(positionValue, currentPrice flo
 		log.Printf("Warning: Invalid current price %.2f, using 1.0", currentPrice)
 		currentPrice = 1.0
 	}
+
+	// Apply the macro-regime multiplier so position sizing tracks the
+	// economic-cartography reading (storm waters shrink risk; following
+	// seas expand it). Multiplier defaults to 1.0 if no feeder is wired.
+	a.mu.RLock()
+	mult := a.regimeMultiplier
+	a.mu.RUnlock()
+	if mult <= 0 {
+		mult = 1.0
+	}
+	positionValue *= mult
 
 	// Calculate position size in shares
 	qty := float64(int(positionValue / currentPrice))

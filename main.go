@@ -20,6 +20,7 @@ import (
 	// to avoid any import conflict or shadowing issues
 	"github.com/rileyseaburg/go-trader/algorithm"
 	"github.com/rileyseaburg/go-trader/algorithm/algo"
+	"github.com/rileyseaburg/go-trader/cartography"
 	"github.com/rileyseaburg/go-trader/claude"
 	"github.com/rileyseaburg/go-trader/notification"
 	"github.com/rileyseaburg/go-trader/ticker"
@@ -104,6 +105,7 @@ func main() {
 	port := flag.String("port", defaultPort, "Port to listen on")
 	symbols := flag.String("symbols", defaultSymbols, "Comma-separated list of ticker symbols")
 	usePaperTrading := flag.Bool("paper", true, "Use paper trading (true) or live trading (false)")
+	mockMode := flag.Bool("mock", strings.EqualFold(os.Getenv("GO_TRADER_MOCK"), "true"), "Run with deterministic mock market/account data instead of Alpaca credentials")
 
 	// Add flags for API keys that can be used instead of environment variables
 	alpacaKey := flag.String("alpaca-key", "", "Alpaca API key (overrides env var)")
@@ -137,17 +139,32 @@ func main() {
 		log.Printf("Using Alpaca Secret Key from command line")
 	}
 
+	if *mockMode {
+		log.Println("Running in mock mode: Alpaca credentials are not required and no live trades will be placed")
+		os.Setenv("GO_TRADER_MOCK", "true")
+		if alpacaAPIKey == "" {
+			alpacaAPIKey = "MOCK_ALPACA_API_KEY"
+		}
+		if alpacaSecretKey == "" {
+			alpacaSecretKey = "MOCK_ALPACA_SECRET_KEY"
+		}
+	}
+
 	// Log the key being used (first few characters only)
 	if alpacaAPIKey != "" {
-		log.Printf("DEBUG: Using Alpaca API Key: %s...", alpacaAPIKey[:5]+"...")
+		prefixLen := 5
+		if len(alpacaAPIKey) < prefixLen {
+			prefixLen = len(alpacaAPIKey)
+		}
+		log.Printf("DEBUG: Using Alpaca API Key: %s...", alpacaAPIKey[:prefixLen])
 	}
 
 	// Validate required API keys
 	if alpacaAPIKey == "" || alpacaSecretKey == "" {
 		if *usePaperTrading {
-			log.Fatal("PAPER_ALPACA_API_KEY and PAPER_ALPACA_SECRET_KEY environment variables are required for paper trading")
+			log.Fatal("PAPER_ALPACA_API_KEY and PAPER_ALPACA_SECRET_KEY environment variables are required for paper trading. For local development without credentials, run with -mock or set GO_TRADER_MOCK=true")
 		} else {
-			log.Fatal("LIVE_ALPACA_API_KEY and LIVE_ALPACA_SECRET_KEY environment variables are required for live trading")
+			log.Fatal("LIVE_ALPACA_API_KEY and LIVE_ALPACA_SECRET_KEY environment variables are required for live trading. For local development without credentials, run with -mock or set GO_TRADER_MOCK=true")
 		}
 	}
 
@@ -157,7 +174,7 @@ func main() {
 		log.Println("Using PAPER trading environment")
 	} else {
 		// Safety check: Only allow live trading if the API key has the correct prefix
-		if !strings.HasPrefix(alpacaAPIKey, liveKeyPrefix) {
+		if !*mockMode && !strings.HasPrefix(alpacaAPIKey, liveKeyPrefix) {
 			log.Println("WARNING: Cannot use live trading - live API keys not detected (keys should start with AK)")
 			log.Println("Falling back to paper trading mode")
 			*usePaperTrading = true
@@ -244,6 +261,163 @@ func main() {
 	tradingAlgorithm.Start(symbolsSlice)
 	log.Println("Trading algorithm initialized but not auto-running - waiting for UI trigger")
 
+	// Cartography — formula provides a slow-moving prior; FRED feed provides
+	// a coincident veto. The applied multiplier is the more cautious of the
+	// two, so live data can shrink risk when reality disagrees with the model
+	// but cannot enlarge it past what the model already allows.
+	// FRED API key sourcing — try Vault first (the credential never lands
+	// in the process environment), then fall back to FRED_API_KEY env, then
+	// formula-only. Vault path/field are overridable but default to a
+	// sensible convention so a vanilla install just works once the secret
+	// is written to the standard location.
+	fredKey := ""
+	fredKeySource := ""
+	vaultPath := os.Getenv("CARTOGRAPHY_VAULT_PATH")
+	if vaultPath == "" {
+		vaultPath = "secret/go-trader/fred"
+	}
+	vaultField := os.Getenv("CARTOGRAPHY_VAULT_FIELD")
+	if vaultField == "" {
+		vaultField = "api_key"
+	}
+	if vl := cartography.NewVaultLoaderFromEnv(); vl != nil {
+		vctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if k, err := vl.Field(vctx, vaultPath, vaultField); err == nil {
+			fredKey = k
+			fredKeySource = "vault:" + vaultPath
+		} else {
+			log.Printf("Vault FRED key load skipped (%s): %v", vaultPath, err)
+		}
+		cancel()
+	}
+	if fredKey == "" {
+		if k := os.Getenv("FRED_API_KEY"); k != "" {
+			fredKey = k
+			fredKeySource = "env:FRED_API_KEY"
+		}
+	}
+
+	var feedCache *cartography.FeedCache
+	signalWatcher := cartography.NewSignalWatcher()
+	if fredKey != "" {
+		feedCache = cartography.NewFeedCache(cartography.NewFREDClient(fredKey), 6*time.Hour)
+		log.Printf("Cartography live-data overlay enabled (key from %s)", fredKeySource)
+	} else {
+		log.Println("Cartography running formula-only — no FRED key in Vault (" + vaultPath + ") or env. Sahm/yield-curve/NFCI/HY-spread overrides disabled.")
+	}
+
+	emitSignalChange := func(ev cartography.ChangeEvent) {
+		// New triggers are HIGH priority — these are the "something just
+		// broke" alerts. Clears are MEDIUM — useful but not urgent.
+		var title, message string
+		var priority notification.NotificationPriority
+		s := ev.Signal
+		switch ev.Kind {
+		case cartography.SignalTriggered:
+			priority = notification.PriorityHigh
+			title = "⚠ " + s.Name + " — TRIGGERED"
+			message = fmt.Sprintf("%s — applied haircut now in effect on position sizing.", s.Description)
+		case cartography.SignalCleared:
+			priority = notification.PriorityMedium
+			title = "✓ " + s.Name + " — CLEARED"
+			message = fmt.Sprintf("%s — haircut released; position sizing restored.", s.Description)
+		}
+		notif := notification.Notification{
+			ID:        fmt.Sprintf("cart-%s-%d", s.Source, ev.ObservedAt.UnixNano()),
+			Type:      notification.TypeSystemAlert,
+			Title:     title,
+			Message:   message,
+			Priority:  priority,
+			Timestamp: ev.ObservedAt,
+			Read:      false,
+			Metadata: map[string]interface{}{
+				"kind":      string(ev.Kind),
+				"source":    s.Source,
+				"value":     s.Value,
+				"threshold": s.Threshold,
+				"signal":    s.Name,
+			},
+		}
+		notificationService.AddNotification(notif)
+		log.Printf("Cartography %s: %s (%.2f vs threshold %.2f)",
+			ev.Kind, s.Name, s.Value, s.Threshold)
+	}
+
+	applyCartography := func() {
+		r := cartography.ReadingAt(time.Now())
+		var feed *cartography.DataFeed
+		if feedCache != nil {
+			feed = feedCache.Get()
+		}
+		applied := cartography.AppliedMultiplier(r.Regime.Multiplier, feed)
+		regimeLabel := r.Regime.Name
+		if feed != nil && feed.Multiplier < r.Regime.Multiplier && len(feed.Triggers) > 0 {
+			regimeLabel = r.Regime.Name + " | DATA OVERRIDE"
+		}
+		tradingAlgorithm.SetRegimeMultiplier(regimeLabel, applied)
+		if feed != nil {
+			log.Printf("Cartography formula=%s ×%.2f | data ×%.2f triggers=%v | applied ×%.2f",
+				r.Regime.Name, r.Regime.Multiplier, feed.Multiplier, feed.Triggers, applied)
+			for _, ev := range signalWatcher.Observe(feed) {
+				emitSignalChange(ev)
+			}
+		} else {
+			log.Printf("Cartography formula=%s ×%.2f composite=%+.2fσ (no live data)",
+				r.Regime.Name, r.Regime.Multiplier, r.Composite)
+		}
+	}
+
+	// refreshAndApply runs a full FRED fetch, updates the cache, re-applies
+	// the multiplier, and emits notifications for any signal that flipped.
+	// Returns the feed for callers that want to inspect it (the manual
+	// refresh endpoint).
+	refreshAndApply := func(rctx context.Context) (*cartography.DataFeed, error) {
+		if feedCache == nil {
+			return nil, fmt.Errorf("FRED_API_KEY not configured")
+		}
+		feed, err := feedCache.Refresh(rctx)
+		if err != nil {
+			return nil, err
+		}
+		applyCartography()
+		return feed, nil
+	}
+
+	if feedCache != nil {
+		go func() {
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if _, err := refreshAndApply(rctx); err != nil {
+				log.Printf("Cartography FRED initial refresh failed: %v", err)
+			}
+		}()
+	}
+	applyCartography()
+
+	go func() {
+		formulaTick := time.NewTicker(time.Hour)
+		defer formulaTick.Stop()
+		fredTick := time.NewTicker(6 * time.Hour)
+		defer fredTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-formulaTick.C:
+				applyCartography()
+			case <-fredTick.C:
+				if feedCache == nil {
+					continue
+				}
+				rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if _, err := refreshAndApply(rctx); err != nil {
+					log.Printf("Cartography FRED refresh failed: %v", err)
+				}
+				cancel()
+			}
+		}
+	}()
+
 	// Register signal callback for notifications
 	tradingAlgorithm.RegisterSignalCallback(func(signal *algorithm.TradeSignal) {
 		// Convert signal priority based on type
@@ -316,7 +490,7 @@ func main() {
 
 	// Set up HTTP handlers, passing API keys for order handlers to use
 	setupHTTPHandlers(client, tradingAlgorithm, tickerServer, basketManager, notificationService,
-		alpacaAPIKey, alpacaSecretKey)
+		feedCache, refreshAndApply, alpacaAPIKey, alpacaSecretKey)
 
 	log.Printf("Starting HTTP server on port %s", *port)
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
@@ -391,7 +565,10 @@ func (a *adaptedClaudeClient) GenerateTradeSignal(symbol string, marketData algo
 }
 
 func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgorithm, tickerServer *ticker.TickerServer,
-	basketManager *ticker.BasketManager, notificationManager *notification.NotificationManager, apiKey, apiSecret string) {
+	basketManager *ticker.BasketManager, notificationManager *notification.NotificationManager,
+	feedCache *cartography.FeedCache,
+	refreshCartography func(context.Context) (*cartography.DataFeed, error),
+	apiKey, apiSecret string) {
 	// Create a registry for the Lopez de Prado algorithms
 	var algoRegistry = make(map[string]interface{})
 
@@ -424,32 +601,65 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 		}
 	}
 
+	mockMode := strings.EqualFold(os.Getenv("GO_TRADER_MOCK"), "true")
+
 	// Account Handler
 	http.HandleFunc("/api/account", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if mockMode {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":              "mock-account",
+				"account_number":  "MOCK123456",
+				"status":          "ACTIVE",
+				"currency":        "USD",
+				"cash":            "100000.00",
+				"buying_power":    "200000.00",
+				"portfolio_value": "100000.00",
+				"equity":          "100000.00",
+				"last_equity":     "99500.00",
+				"mock":            true,
+			})
+			return
+		}
+
 		acct, err := client.GetAccount()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(acct)
 	}))
 
 	// Positions Handler
 	http.HandleFunc("/api/positions", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if mockMode {
+			json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"symbol": "AAPL", "qty": "10", "avg_entry_price": "185.00", "market_value": "1900.00", "unrealized_pl": "50.00", "side": "long"},
+			})
+			return
+		}
+
 		positions, err := client.GetPositions()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(positions)
 	}))
 
 	// Orders Handler
 	http.HandleFunc("/api/orders", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if mockMode {
+			json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"id": "mock-order-1", "symbol": "MSFT", "side": "buy", "type": "market", "status": "filled", "qty": "5", "filled_avg_price": "420.00", "submitted_at": time.Now().Add(-1 * time.Hour)},
+			})
+			return
+		}
+
 		orders, err := client.GetOrders(alpaca.GetOrdersRequest{
 			Status: "all",
 			Limit:  100,
@@ -459,7 +669,6 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orders)
 	}))
 
@@ -820,7 +1029,7 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 				endDate = time.Now()
 			}
 
-			// Create request 
+			// Create request
 			request := types.HistoricalDataRequest{
 				Symbol:    symbol,
 				StartDate: startDate,
@@ -997,6 +1206,101 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": fmt.Sprintf("Signal for %s rejected", request.Symbol),
+		})
+	}))
+
+	// Economic Cartography — current reading, optional chart series, and
+	// the regime-derived risk multiplier currently being applied to sizing.
+	http.HandleFunc("/api/cartography", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Optional ?at=YYYY-MM-DD to read a different point in time —
+		// useful for the UI's time-navigation slider.
+		now := time.Now()
+		if at := r.URL.Query().Get("at"); at != "" {
+			if parsed, err := time.Parse("2006-01-02", at); err == nil {
+				now = parsed
+			}
+		}
+
+		reading := cartography.ReadingAt(now)
+
+		appliedRegime, appliedMult := tradingAlgo.GetRegimeMultiplier()
+		var feed *cartography.DataFeed
+		if feedCache != nil {
+			feed = feedCache.Get()
+		}
+		response := map[string]interface{}{
+			"reading": reading,
+			"applied": map[string]interface{}{
+				"regime":     appliedRegime,
+				"multiplier": appliedMult,
+			},
+			"feed":             feed, // null if FRED key absent
+			"data_integration": feedCache != nil,
+		}
+
+		// Include the full chart series only when explicitly requested,
+		// since it's ~460 points.
+		if r.URL.Query().Get("series") == "true" {
+			startYear := 1925.0
+			endYear := 2040.0
+			step := 0.25
+			if v := r.URL.Query().Get("start"); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					startYear = f
+				}
+			}
+			if v := r.URL.Query().Get("end"); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					endYear = f
+				}
+			}
+			if v := r.URL.Query().Get("step"); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					step = f
+				}
+			}
+			response["series"] = cartography.Series(startYear, endYear, step)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+
+	// Manual FRED refresh — triggers an out-of-band fetch and re-applies
+	// the multiplier. Useful after market-moving releases (NFP, CPI, etc.)
+	// when waiting for the next 6h tick is too slow.
+	http.HandleFunc("/api/cartography/refresh", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if feedCache == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "FRED_API_KEY not configured — cartography is formula-only",
+			})
+			return
+		}
+		rctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		feed, err := refreshCartography(rctx)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+			return
+		}
+		// refreshCartography already applied the multiplier and emitted
+		// any flip notifications via the watcher — just surface state.
+		appliedRegime, appliedMult := tradingAlgo.GetRegimeMultiplier()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"feed":    feed,
+			"applied": map[string]interface{}{"regime": appliedRegime, "multiplier": appliedMult},
 		})
 	}))
 
@@ -1222,10 +1526,10 @@ func setupHTTPHandlers(client *alpaca.Client, tradingAlgo *algorithm.TradingAlgo
 
 		// Get historical data
 		request := types.HistoricalDataRequest{
-			Symbol:    req.Symbol,                     // Symbol to get data for
-			StartDate: time.Now().AddDate(0, 0, -30),  // Last 30 days
-			EndDate:   time.Now(),                     // Current time
-			TimeFrame: "1D",                           // Daily timeframe
+			Symbol:    req.Symbol,                    // Symbol to get data for
+			StartDate: time.Now().AddDate(0, 0, -30), // Last 30 days
+			EndDate:   time.Now(),                    // Current time
+			TimeFrame: "1D",                          // Daily timeframe
 		}
 
 		// Use the correctly imported algorithm package and function

@@ -1,0 +1,36 @@
+# Build artifacts that shouldn't go into the build context
+go-trader
+go-trader.exe
+web-ui/dist/
+web-ui/node_modules/
+rust-trader/target/
+
+# Local-only state
+.env
+*.env.local
+data/baskets/
+
+# Repo metadata that's irrelevant to the runtime image
+.git/
+.gitignore
+.codetether-agent/
+claude-share-download/
+features/
+*.md
+LICENSE
+makefile
+run-tests.sh
+run-tests.bat
+
+# Tests/fixtures
+**/*_test.go
+**/testdata/
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Standalone .tsx — superseded by web-ui/src/cartography.jsx
+economic-cartogrophy.tsx

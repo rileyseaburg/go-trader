@@ -1,0 +1,92 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",                    # main binary
+    "crates/types",
+    "crates/ticker",
+    "crates/notification",
+    "crates/cartography",
+    "crates/algorithm",
+    "crates/algo",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+# Use rustls so the container does not depend on OpenSSL shared libraries.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Decimal arithmetic
+rust_decimal = "1"
+rust_decimal_macros = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID for IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# dotenv
+dotenvy = "0.15"
+
+# Internal crates
+go-trader-types = { path = "crates/types" }
+go-trader-ticker = { path = "crates/ticker" }
+go-trader-notification = { path = "crates/notification" }
+go-trader-cartography = { path = "crates/cartography" }
+go-trader-algorithm = { path = "crates/algorithm" }
+go-trader-algo = { path = "crates/algo" }
+
+[package]
+name = "go-trader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+go-trader-types.workspace = true
+go-trader-ticker.workspace = true
+go-trader-notification.workspace = true
+go-trader-cartography.workspace = true
+go-trader-algorithm.workspace = true
+go-trader-algo.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+rust_decimal.workspace = true
+rust_decimal_macros.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+dotenvy.workspace = true
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
