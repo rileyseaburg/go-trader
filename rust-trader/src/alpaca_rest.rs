@@ -241,7 +241,7 @@ impl AlpacaRestClient {
         let bars: Vec<Bar> = arr
             .iter()
             .filter_map(|b| {
-                let ts = b.get("t")?.as_str()?.parse::<i64>().ok()?;
+                let ts = parse_timestamp(b.get("t")?)?;
                 Some(Bar {
                     timestamp: ts,
                     open: json_f64(b, "o")?,
@@ -284,6 +284,25 @@ impl AlpacaRestClient {
             return Err(format!("Alpaca quote: {} {}", status, text).into());
         }
         Ok(serde_json::from_str(&text)?)
+    }
+}
+
+/// Parse Alpaca bar timestamp — supports both ISO 8601 strings
+/// (e.g. "2026-05-11T12:05:00Z") and integer epoch seconds.
+fn parse_timestamp(v: &serde_json::Value) -> Option<i64> {
+    match v {
+        serde_json::Value::String(s) => {
+            // Try integer epoch first
+            if let Ok(ts) = s.parse::<i64>() {
+                return Some(ts);
+            }
+            // Try ISO 8601
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.timestamp())
+                .ok()
+        }
+        serde_json::Value::Number(n) => n.as_i64(),
+        _ => None,
     }
 }
 
