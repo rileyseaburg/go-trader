@@ -39,6 +39,7 @@ impl Default for BacktestConfig {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SimPosition {
     symbol: String,
     qty: f64,
