@@ -582,6 +582,7 @@ dependencies = [
  "futures-util",
  "go-trader-algo",
  "go-trader-algorithm",
+ "go-trader-backtest",
  "go-trader-cartography",
  "go-trader-indicators",
  "go-trader-notification",
@@ -623,6 +624,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "go-trader-backtest"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "go-trader-algorithm",
+ "go-trader-indicators",
+ "go-trader-types",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

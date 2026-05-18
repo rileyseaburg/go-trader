@@ -9,6 +9,7 @@ members = [
     "crates/algorithm",
     "crates/algo",
     "crates/indicators",
+    "crates/backtest",
 ]
 
 [workspace.package]
@@ -59,6 +60,7 @@ go-trader-cartography = { path = "crates/cartography" }
 go-trader-algorithm = { path = "crates/algorithm" }
 go-trader-algo = { path = "crates/algo" }
 go-trader-indicators = { path = "crates/indicators" }
+go-trader-backtest = { path = "crates/backtest" }
 
 [package]
 name = "go-trader"
@@ -74,6 +76,7 @@ go-trader-cartography.workspace = true
 go-trader-algorithm.workspace = true
 go-trader-algo.workspace = true
 go-trader-indicators.workspace = true
+go-trader-backtest.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true

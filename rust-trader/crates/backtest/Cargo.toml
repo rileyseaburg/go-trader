@@ -1,0 +1,14 @@
+[package]
+name = "go-trader-backtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+go-trader-types = { path = "../types" }
+go-trader-indicators = { path = "../indicators" }
+go-trader-algorithm = { path = "../algorithm" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }

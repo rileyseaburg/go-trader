@@ -18,6 +18,7 @@ use go_trader_cartography::{self as cartography, Reading};
 use go_trader_notification::NotificationManager;
 use go_trader_ticker::{change_from_snapshot, DataHandler, TickerData, TickerServer};
 use go_trader_types::TradeSignal;
+use go_trader_backtest::{BacktestEngine, BacktestConfig};
 
 use crate::{
     alpaca_rest::AlpacaRestClient,
@@ -73,6 +74,15 @@ struct Args {
         default_value_t = 300
     )]
     auto_trade_interval_secs: u64,
+    /// Run historical backtest instead of live trading.
+    #[arg(long, default_value_t = false)]
+    backtest: bool,
+    /// Equity to start backtest with.
+    #[arg(long, default_value_t = 5000.0)]
+    backtest_equity: f64,
+    /// Number of historical bars for backtest.
+    #[arg(long, default_value_t = 1000)]
+    backtest_bars: u32,
 }
 
 #[tokio::main]
@@ -88,6 +98,12 @@ async fn main() {
         .init();
 
     let args = Args::parse();
+
+    // Backtest mode: fetch historical bars and simulate
+    if args.backtest {
+        run_backtest(args).await;
+        return;
+    }
 
     // Resolve API keys
     let mock_mode = args.mock || std::env::var("GO_TRADER_MOCK").unwrap_or_default() == "true";
@@ -351,6 +367,49 @@ async fn main() {
     info!("Starting HTTP server on {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn run_backtest(args: Args) {
+    let api_key = args.alpaca_key.clone()
+        .or_else(|| std::env::var("PAPER_ALPACA_API_KEY").ok())
+        .unwrap_or_default();
+    let api_secret = args.alpaca_secret.clone()
+        .or_else(|| std::env::var("PAPER_ALPACA_SECRET_KEY").ok())
+        .or_else(|| std::env::var("PAPAER_ALPACA_SECRET_KEY").ok())
+        .unwrap_or_default();
+    if api_key.is_empty() || api_secret.is_empty() {
+        error!("API keys required for backtest. Set PAPER_ALPACA_API_KEY/SECRET or use --alpaca-key/--alpaca-secret");
+        std::process::exit(1);
+    }
+    let base_url = if args.paper { PAPER_URL } else { LIVE_URL }.to_string();
+    let client = AlpacaRestClient::new(api_key, api_secret, base_url);
+    let symbols: Vec<String> = args.symbols.split(',').map(|s| s.trim().to_string()).collect();
+    let timeframe = "5Min";
+    let config = BacktestConfig {
+        starting_equity: args.backtest_equity,
+        warmup_bars: 50,
+        ..Default::default()
+    };
+    for symbol in &symbols {
+        info!(symbol, bars = args.backtest_bars, "Fetching historical bars for backtest");
+        match client.get_bars(symbol, timeframe, args.backtest_bars).await {
+            Ok(bars) => {
+                info!(symbol, count = bars.len(), "Running backtest");
+                let mut engine = BacktestEngine::new(config.clone());
+                let report = engine.run(symbol, bars);
+                report.print_summary();
+                let json_path = format!("/tmp/backtest_{}.json", symbol.to_lowercase());
+                match serde_json::to_string_pretty(&report) {
+                    Ok(json) => {
+                        std::fs::write(&json_path, json).ok();
+                        info!(symbol, path = %json_path, "Report saved");
+                    }
+                    Err(e) => warn!(symbol, "Failed to serialize report: {}", e),
+                }
+            }
+            Err(e) => error!(symbol, "Failed to fetch bars: {}", e),
+        }
+    }
 }
 
 fn spawn_auto_trade_loop(
