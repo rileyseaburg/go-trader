@@ -198,9 +198,13 @@ impl AlpacaRestClient {
         timeframe: &str,  // e.g. "1Min", "5Min", "15Min", "1H", "1D"
         limit: u32,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        // Look back 7 calendar days to ensure we capture bars even on
+        // weekends / holidays when "now" has no recent data.
+        let start = chrono::Utc::now() - chrono::Duration::days(7);
+        let start_str = start.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let url = format!(
-            "{}/v2/stocks/{}/bars?timeframe={}&limit={}&adjustment=raw&feed=iex&sort=asc",
-            self.data_url, symbol, timeframe, limit
+            "{}/v2/stocks/{}/bars?timeframe={}&limit={}&adjustment=raw&feed=iex&sort=asc&start={}",
+            self.data_url, symbol, timeframe, limit, start_str
         );
         let resp = self
             .http
