@@ -61,8 +61,9 @@ async fn run_once(
 
     ws.send(Message::Text(
         serde_json::json!({
-            "action": "authenticate",
-            "data": {"key_id": api_key, "secret_key": api_secret}
+            "action": "auth",
+            "key": api_key,
+            "secret": api_secret
         })
         .to_string()
         .into(),
