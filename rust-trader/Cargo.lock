@@ -583,6 +583,7 @@ dependencies = [
  "go-trader-algo",
  "go-trader-algorithm",
  "go-trader-cartography",
+ "go-trader-indicators",
  "go-trader-notification",
  "go-trader-ticker",
  "go-trader-types",
@@ -614,6 +615,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "go-trader-cartography",
+ "go-trader-indicators",
  "go-trader-types",
  "reqwest",
  "rust_decimal",
@@ -634,6 +636,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "go-trader-indicators"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

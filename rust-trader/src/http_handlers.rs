@@ -86,6 +86,7 @@ pub fn build_router(
         .route("/api/notifications/read-all", post(read_all))
         .route("/api/audit/summary", get(get_audit_summary))
         .route("/api/audit/{table}", get(get_audit_table))
+        .route("/api/indicators/{symbol}", get(get_indicators))
         .route("/api/execute/buy/{symbol}", post(exec_buy))
         .route("/api/execute/sell/{symbol}", post(exec_sell))
         .route("/api/{*path}", any(api_not_found))
@@ -304,6 +305,24 @@ async fn get_audit_table(
     {
         Ok(rows) => Json(serde_json::json!({"rows": rows})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_indicators(
+    State(s): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+) -> impl IntoResponse {
+    match s.algo.get_indicators(&symbol) {
+        Some(ind) => Json(serde_json::to_value(ind).unwrap_or_default()).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no indicator data available",
+                "symbol": symbol,
+                "hint": "indicators are computed from the bar buffer during auto-trade evaluation; ensure bars have accumulated (≥20 bars required)"
+            })),
+        )
+            .into_response(),
     }
 }
 

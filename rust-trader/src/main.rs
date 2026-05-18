@@ -3,6 +3,7 @@
 mod alpaca_rest;
 mod alpaca_stream;
 mod audit_store;
+mod bar_buffer;
 mod http_handlers;
 
 use std::sync::{Arc, RwLock};
@@ -21,6 +22,7 @@ use go_trader_types::TradeSignal;
 use crate::{
     alpaca_rest::AlpacaRestClient,
     audit_store::{AuditStore, DecisionRecord},
+    bar_buffer::BarBuffer,
 };
 
 const DEFAULT_PORT: &str = "8080";
@@ -162,6 +164,7 @@ async fn main() {
     let notification_mgr = Arc::new(NotificationManager::new(MAX_NOTIFICATIONS));
     let price_tracker: Arc<RwLock<std::collections::HashMap<String, f64>>> =
         Arc::new(RwLock::new(std::collections::HashMap::new()));
+    let bar_buffer = Arc::new(BarBuffer::with_default_capacity());
 
     // Cartography setup
     // TODO: wire async Vault loading here; for now, use FRED_API_KEY when present.
@@ -209,10 +212,12 @@ async fn main() {
     let algo_clone = trading_algo.clone();
     let notif_clone = notification_mgr.clone();
     let pt_clone = price_tracker.clone();
+    let buf_clone = bar_buffer.clone();
     struct Handler {
         algo: Arc<TradingAlgorithm>,
         notif: Arc<NotificationManager>,
         pt: Arc<RwLock<std::collections::HashMap<String, f64>>>,
+        buf: Arc<BarBuffer>,
     }
     impl DataHandler for Handler {
         fn handle(&self, symbol: &str, data: &TickerData) {
@@ -223,6 +228,20 @@ async fn main() {
             let change = change_from_snapshot(data);
             self.algo
                 .update_market_data(symbol, price, high, low, volume, change);
+
+            // Push bar into buffer for indicator computation.
+            if data.bar.is_some() {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let bar = go_trader_indicators::Bar {
+                    timestamp: now_ms,
+                    open: price, // approximate from trade price
+                    high,
+                    low,
+                    close: price,
+                    volume,
+                };
+                self.buf.push(symbol, bar);
+            }
 
             let prev = self.pt.read().unwrap().get(symbol).copied().unwrap_or(0.0);
             if prev > 0.0 {
@@ -254,6 +273,7 @@ async fn main() {
         algo: algo_clone,
         notif: notif_clone,
         pt: pt_clone,
+        buf: buf_clone,
     }));
 
     // Start ticker
@@ -300,6 +320,7 @@ async fn main() {
             symbols.clone(),
             args.auto_trade_interval_secs,
             args.dry_run,
+            bar_buffer.clone(),
         );
     } else {
         info!("Auto-trade loop disabled; use --auto-trade to enable automated paper/live order evaluation");
@@ -332,6 +353,7 @@ fn spawn_auto_trade_loop(
     symbols: Vec<String>,
     interval_secs: u64,
     dry_run: bool,
+    bar_buffer: Arc<BarBuffer>,
 ) {
     let interval_secs = interval_secs.max(15);
     tokio::spawn(async move {
@@ -344,6 +366,10 @@ fn spawn_auto_trade_loop(
         loop {
             interval.tick().await;
             sync_portfolio_from_alpaca(&trading_algo, &alpaca_client).await;
+
+            // Refresh indicators from bar buffer before evaluating.
+            refresh_indicators(&trading_algo, &bar_buffer, &symbols);
+
             for symbol in &symbols {
                 if let Err(e) =
                     evaluate_symbol_for_auto_trade(&trading_algo, &audit, symbol, dry_run).await
@@ -398,6 +424,17 @@ async fn evaluate_symbol_for_auto_trade(
         );
     }
     Ok(())
+}
+
+/// Compute fresh indicators from the bar buffer and push them to the algorithm.
+fn refresh_indicators(algo: &Arc<TradingAlgorithm>, buf: &Arc<BarBuffer>, symbols: &[String]) {
+    for symbol in symbols {
+        let bars = buf.get_bars(symbol);
+        if bars.len() >= 20 {
+            let set = go_trader_indicators::compute_all(&bars);
+            algo.update_indicators(symbol, set);
+        }
+    }
 }
 
 fn is_actionable_signal(signal: &TradeSignal) -> bool {

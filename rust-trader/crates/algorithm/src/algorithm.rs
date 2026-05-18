@@ -6,16 +6,20 @@ use std::sync::{Arc, RwLock};
 use chrono::Utc;
 use tracing::{error, info};
 
+use go_trader_indicators::IndicatorSet;
 use go_trader_types::{MarketData, TradeSignal, SIGNAL_HOLD};
 
 use crate::local_signal::RuleBasedSignalEngine;
+use crate::strategy::Arbitrator;
 use crate::types::*;
 
 pub struct TradingAlgorithm {
     claude_client: Option<Box<dyn ClaudeClient>>,
     local_signal_engine: RuleBasedSignalEngine,
+    arbitrator: Arbitrator,
     alpaca_client: Option<Box<dyn AlpacaClient>>,
     market_data: Arc<RwLock<HashMap<String, MarketData>>>,
+    indicators: Arc<RwLock<HashMap<String, IndicatorSet>>>,
     signals: Arc<RwLock<HashMap<String, TradeSignal>>>,
     portfolio: Arc<RwLock<PortfolioData>>,
     risk_params: Arc<RwLock<RiskParameters>>,
@@ -36,8 +40,10 @@ impl TradingAlgorithm {
         Self {
             claude_client: None,
             local_signal_engine: RuleBasedSignalEngine,
+            arbitrator: Arbitrator::new_default(),
             alpaca_client: None,
             market_data: Arc::new(RwLock::new(HashMap::new())),
+            indicators: Arc::new(RwLock::new(HashMap::new())),
             signals: Arc::new(RwLock::new(HashMap::new())),
             portfolio: Arc::new(RwLock::new(PortfolioData::default())),
             risk_params: Arc::new(RwLock::new(RiskParameters::default())),
@@ -113,6 +119,22 @@ impl TradingAlgorithm {
             });
     }
 
+    /// Update the computed indicator set for a symbol.
+    ///
+    /// Typically called after `compute_all()` on the bar buffer produces
+    /// a fresh `IndicatorSet`.
+    pub fn update_indicators(&self, symbol: &str, set: IndicatorSet) {
+        self.indicators
+            .write()
+            .unwrap()
+            .insert(symbol.to_string(), set);
+    }
+
+    /// Get the current indicator set for a symbol.
+    pub fn get_indicators(&self, symbol: &str) -> Option<IndicatorSet> {
+        self.indicators.read().unwrap().get(symbol).cloned()
+    }
+
     pub async fn process_symbol(
         &self,
         symbol: &str,
@@ -144,14 +166,31 @@ impl TradingAlgorithm {
                         confidence: None,
                     }
                 }),
-            None => self.local_signal_engine.generate(
-                symbol,
-                &md,
-                &portfolio,
-                &risk,
-                &regime_name,
-                regime_multiplier,
-            ),
+            None => {
+                // Use multi-strategy arbitrator when indicator data is available,
+                // otherwise fall back to the simple rule-based engine.
+                let indicators = self.indicators.read().unwrap();
+                if let Some(ind_set) = indicators.get(symbol) {
+                    self.arbitrator.generate_signal(
+                        symbol,
+                        &md,
+                        &portfolio,
+                        &risk,
+                        &regime_name,
+                        regime_multiplier,
+                        ind_set,
+                    )
+                } else {
+                    self.local_signal_engine.generate(
+                        symbol,
+                        &md,
+                        &portfolio,
+                        &risk,
+                        &regime_name,
+                        regime_multiplier,
+                    )
+                }
+            }
         };
 
         self.signals
@@ -222,8 +261,37 @@ impl TradingAlgorithm {
         let account = client.get_account()?;
         let risk = self.risk_params.read().unwrap();
         let regime_mult = *self.regime_multiplier.read().unwrap();
-        let position_value =
+
+        // ATR-based position sizing: risk = 1 ATR unit per share,
+        // cap at max_position_size_percent of equity × regime.
+        let base_position_value =
             account.equity * (risk.max_position_size_percent / 100.0) * regime_mult;
+
+        // If we have ATR data, refine position size so that the dollar risk
+        // per trade (shares × ATR) stays within 1% of equity.
+        let position_value = self
+            .indicators
+            .read()
+            .unwrap()
+            .get(&signal.symbol)
+            .and_then(|ind| ind.atr_14)
+            .map(|atr| {
+                if atr > f64::EPSILON {
+                    let risk_budget = account.equity * 0.01; // 1% of equity
+                    let shares_by_atr = risk_budget / atr;
+                    let price = signal.limit_price.unwrap_or(0.0);
+                    if price > f64::EPSILON {
+                        let atr_position_value = shares_by_atr * price;
+                        // Use the smaller of ATR-based or regime-based position
+                        atr_position_value.min(base_position_value)
+                    } else {
+                        base_position_value
+                    }
+                } else {
+                    base_position_value
+                }
+            })
+            .unwrap_or(base_position_value);
 
         match signal.signal.as_str() {
             "buy" => {

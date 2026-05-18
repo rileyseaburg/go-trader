@@ -8,6 +8,7 @@ members = [
     "crates/cartography",
     "crates/algorithm",
     "crates/algo",
+    "crates/indicators",
 ]
 
 [workspace.package]
@@ -57,6 +58,7 @@ go-trader-notification = { path = "crates/notification" }
 go-trader-cartography = { path = "crates/cartography" }
 go-trader-algorithm = { path = "crates/algorithm" }
 go-trader-algo = { path = "crates/algo" }
+go-trader-indicators = { path = "crates/indicators" }
 
 [package]
 name = "go-trader"
@@ -71,6 +73,7 @@ go-trader-notification.workspace = true
 go-trader-cartography.workspace = true
 go-trader-algorithm.workspace = true
 go-trader-algo.workspace = true
+go-trader-indicators.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true

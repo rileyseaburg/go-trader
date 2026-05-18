@@ -9,11 +9,16 @@ use go_trader_algorithm::{
 };
 
 use crate::audit_store::{json_f64, json_str, AuditStore, OrderRecord};
+use go_trader_indicators::Bar;
+
+/// Alpaca market data base URL (separate from trading API).
+const DATA_BASE_URL: &str = "https://data.alpaca.markets";
 
 pub struct AlpacaRestClient {
     api_key: String,
     api_secret: String,
     base_url: String,
+    data_url: String,
     http: reqwest::Client,
     audit: Option<AuditStore>,
     dry_run: bool,
@@ -25,6 +30,7 @@ impl Clone for AlpacaRestClient {
             api_key: self.api_key.clone(),
             api_secret: self.api_secret.clone(),
             base_url: self.base_url.clone(),
+            data_url: self.data_url.clone(),
             http: self.http.clone(),
             audit: self.audit.clone(),
             dry_run: self.dry_run,
@@ -38,10 +44,17 @@ impl AlpacaRestClient {
             api_key,
             api_secret,
             base_url,
+            data_url: DATA_BASE_URL.to_string(),
             http: reqwest::Client::new(),
             audit: None,
             dry_run: false,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_data_url(mut self, url: String) -> Self {
+        self.data_url = url;
+        self
     }
 
     pub fn with_audit(mut self, audit: AuditStore) -> Self {
@@ -168,6 +181,105 @@ impl AlpacaRestClient {
             .send()
             .await?;
         Ok(resp.json().await?)
+    }
+
+    // -----------------------------------------------------------------------
+    // Market Data API (data.alpaca.markets)
+    // -----------------------------------------------------------------------
+
+    /// Fetch historical OHLCV bars for a symbol.
+    ///
+    /// Alpaca endpoint: `GET /v2/stocks/{symbol}/bars`
+    /// Returns bars sorted ascending by timestamp.
+    #[allow(dead_code)]
+    pub async fn get_bars_raw(
+        &self,
+        symbol: &str,
+        timeframe: &str,  // e.g. "1Min", "5Min", "15Min", "1H", "1D"
+        limit: u32,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!(
+            "{}/v2/stocks/{}/bars?timeframe={}&limit={}&adjustment=raw&feed=iex&sort=asc",
+            self.data_url, symbol, timeframe, limit
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .headers(self.auth())
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(format!("Alpaca bars: {} {}", status, text).into());
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// Fetch bars and parse into typed `Bar` structs.
+    #[allow(dead_code)]
+    pub async fn get_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        limit: u32,
+    ) -> Result<Vec<Bar>, Box<dyn std::error::Error + Send + Sync>> {
+        let raw = self.get_bars_raw(symbol, timeframe, limit).await?;
+        let bars_val = raw
+            .get("bars")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        let arr = bars_val
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        let bars: Vec<Bar> = arr
+            .iter()
+            .filter_map(|b| {
+                let ts = b.get("t")?.as_str()?.parse::<i64>().ok()?;
+                Some(Bar {
+                    timestamp: ts,
+                    open: json_f64(b, "o")?,
+                    high: json_f64(b, "h")?,
+                    low: json_f64(b, "l")?,
+                    close: json_f64(b, "c")?,
+                    volume: json_f64(b, "v")?,
+                })
+            })
+            .collect();
+
+        tracing::debug!(
+            "Fetched {} bars for {} ({})",
+            bars.len(),
+            symbol,
+            timeframe
+        );
+        Ok(bars)
+    }
+
+    /// Fetch the latest quote for a symbol.
+    #[allow(dead_code)]
+    pub async fn get_latest_quote_raw(
+        &self,
+        symbol: &str,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!(
+            "{}/v2/stocks/{}/quotes/latest",
+            self.data_url, symbol
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .headers(self.auth())
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(format!("Alpaca quote: {} {}", status, text).into());
+        }
+        Ok(serde_json::from_str(&text)?)
     }
 }
 
