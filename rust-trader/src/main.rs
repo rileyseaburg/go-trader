@@ -166,6 +166,13 @@ async fn main() {
         Arc::new(RwLock::new(std::collections::HashMap::new()));
     let bar_buffer = Arc::new(BarBuffer::with_default_capacity());
 
+    // Seed bar buffer with historical bars so indicators are available immediately.
+    if !mock_mode {
+        seed_bar_buffer(&alpaca_client, &bar_buffer, &symbols).await;
+    } else {
+        info!("Mock mode — skipping historical bar fetch");
+    }
+
     // Cartography setup
     // TODO: wire async Vault loading here; for now, use FRED_API_KEY when present.
     let fred_key = std::env::var("FRED_API_KEY").unwrap_or_default();
@@ -433,6 +440,42 @@ fn refresh_indicators(algo: &Arc<TradingAlgorithm>, buf: &Arc<BarBuffer>, symbol
         if bars.len() >= 20 {
             let set = go_trader_indicators::compute_all(&bars);
             algo.update_indicators(symbol, set);
+        }
+    }
+}
+
+/// Fetch historical 5-minute bars from Alpaca and seed the bar buffer.
+///
+/// This ensures indicator computation has enough data immediately on
+/// startup rather than waiting for live ticks to accumulate.
+async fn seed_bar_buffer(
+    alpaca_client: &AlpacaRestClient,
+    buf: &Arc<BarBuffer>,
+    symbols: &[String],
+) {
+    // 300 five-minute bars = ~1 trading day of data, enough for all indicators
+    // including 200-SMA.
+    const BAR_COUNT: u32 = 300;
+    const TIMEFRAME: &str = "5Min";
+
+    for symbol in symbols {
+        match alpaca_client.get_bars(symbol, TIMEFRAME, BAR_COUNT).await {
+            Ok(bars) => {
+                for bar in &bars {
+                    buf.push(symbol, bar.clone());
+                }
+                info!(
+                    symbol,
+                    bars = bars.len(),
+                    "Seeded bar buffer with historical bars"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    symbol,
+                    "HISTORICAL_BARS_FETCH_FAILED: {}: {}", TIMEFRAME, e
+                );
+            }
         }
     }
 }
