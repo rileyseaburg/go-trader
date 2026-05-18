@@ -4,4 +4,8 @@ rust-trader/target/
 *.dll
 *.so
 *.dylib
-*.pdb
+*.pdb/go-trader
+/go-trader.exe
+.codetether-agent/
+.codetether/
+claude-share-download/
