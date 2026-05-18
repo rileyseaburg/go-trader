@@ -38,7 +38,7 @@ spec:
           # Image tag is patched at deploy time — see deploy/build-and-push.sh.
           image: us-central1-docker.pkg.dev/spotlessbinco/spotlessbinco/go-trader:placeholder
           imagePullPolicy: IfNotPresent
-          args: ["--port", "8080", "--auto-trade", "--db-path", "/app/data/go-trader.sqlite3"]
+          args: ["--port", "8080", "--auto-trade", "--symbols", "AAPL,MSFT,TSLA,CBRS", "--db-path", "/app/data/go-trader.sqlite3"]
           ports:
             - name: http
               containerPort: 8080
