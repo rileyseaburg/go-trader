@@ -69,6 +69,7 @@ pub fn build_router(
         .route("/api/account", get(get_account))
         .route("/api/positions", get(get_positions))
         .route("/api/orders", get(get_orders))
+        .route("/api/runtime-status", get(get_runtime_status))
         .route("/api/tickers", get(get_tickers).post(update_tickers))
         .route("/api/signals", get(get_signals))
         .route(
@@ -129,6 +130,28 @@ async fn get_orders(State(s): State<Arc<AppState>>) -> impl IntoResponse {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+async fn get_runtime_status(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let trading_mode = if s.mock_mode {
+        "MOCK"
+    } else if s.dry_run {
+        "DRY_RUN"
+    } else {
+        "LIVE_PAPER"
+    };
+
+    Json(serde_json::json!({
+        "trading_mode": trading_mode,
+        "mock_mode": s.mock_mode,
+        "dry_run": s.dry_run,
+        "order_submission_enabled": !s.mock_mode && !s.dry_run,
+        "broker": if s.mock_mode { "mock" } else { "alpaca" },
+        "broker_environment": if s.base_url.contains("paper") { "paper" } else { "live_or_custom" },
+        "base_url": s.base_url,
+        "algorithm_running": s.algo.is_running(),
+        "regime_name": s.algo.get_regime_name(),
+        "regime_multiplier": s.algo.get_regime_multiplier(),
+    }))
 }
 async fn get_tickers(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({"symbols":s.ticker.get_symbols(),"data":s.ticker.get_all_last_data()}))
