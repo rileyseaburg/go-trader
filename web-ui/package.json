@@ -1,0 +1,23 @@
+{
+  "name": "go-trader-web-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test:api": "node scripts/test-api.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
+    "test:all": "npm run test:api && npm run test:ui",
+    "cypress": "echo 'Cypress is not installed; use npm run test:ui for the built-in smoke test.'"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "typescript": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {}
+}
