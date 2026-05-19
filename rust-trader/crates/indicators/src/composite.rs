@@ -17,6 +17,7 @@ pub fn compute_all(bars: &[Bar]) -> IndicatorSet {
     let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
     let highs: Vec<f64> = bars.iter().map(|b| b.high).collect();
     let lows: Vec<f64> = bars.iter().map(|b| b.low).collect();
+    let volumes: Vec<f64> = bars.iter().map(|b| b.volume).collect();
 
     let mut set = IndicatorSet::default();
 
@@ -68,6 +69,26 @@ pub fn compute_all(bars: &[Bar]) -> IndicatorSet {
     if let Some(st) = stochastic(&highs, &lows, &closes, 14, 3, 3) {
         set.stoch_k = Some(st.percent_k);
         set.stoch_d = Some(st.percent_d);
+    }
+
+    // Volume surge ratio: latest bar volume relative to the trailing average.
+    // Exclude the latest bar from the baseline so spikes are not diluted by
+    // the very bar we are trying to classify.
+    if volumes.len() >= 21 {
+        let latest = *volumes.last().unwrap_or(&0.0);
+        let baseline: Vec<f64> = volumes[..volumes.len() - 1]
+            .iter()
+            .rev()
+            .take(20)
+            .copied()
+            .filter(|v| *v > 0.0)
+            .collect();
+        if !baseline.is_empty() && latest > 0.0 {
+            let avg = baseline.iter().sum::<f64>() / baseline.len() as f64;
+            if avg > f64::EPSILON {
+                set.volume_ratio = Some(latest / avg);
+            }
+        }
     }
 
     // --- Derived signals ---
@@ -172,5 +193,18 @@ mod tests {
         assert!(set.sma_200.is_none());
         assert!(set.ema_200.is_none());
         assert_eq!(set.trend, TrendDirection::Neutral);
+        assert!(set.volume_ratio.is_none());
+    }
+
+    #[test]
+    fn compute_all_sets_volume_ratio_from_latest_vs_prior_average() {
+        let mut bars = make_bars(25, 100.0, 0.1);
+        for bar in &mut bars[..24] {
+            bar.volume = 100.0;
+        }
+        bars[24].volume = 250.0;
+
+        let set = compute_all(&bars);
+        assert_eq!(set.volume_ratio, Some(2.5));
     }
 }

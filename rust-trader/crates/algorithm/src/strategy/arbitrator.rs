@@ -132,7 +132,7 @@ impl Arbitrator {
             } else {
                 (
                     SIGNAL_HOLD,
-                    confidence.max(0.45),
+                    confidence,
                     format!("MULTI-STRATEGY HOLD (net={:+.02}, conf={:.0}%): ", net_direction, confidence * 100.0),
                 )
             };
@@ -234,6 +234,7 @@ mod tests {
             &ind,
         );
         assert_eq!(signal.signal, SIGNAL_HOLD, "reasoning: {}", signal.reasoning);
+        assert_eq!(signal.confidence, Some(0.0));
     }
 
     #[test]
