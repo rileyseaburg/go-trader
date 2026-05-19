@@ -57,6 +57,12 @@ code { background: #e2e8f0; border-radius: 4px; padding: 0.1rem 0.3rem; }
 .audit-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
 .audit-table td { border-top: 1px solid #e2e8f0; padding: 7px 5px; vertical-align: top; overflow-wrap: anywhere; }
 .audit-table td:first-child { color: #475569; width: 36%; }
+.pipeline-details { margin-top: 8px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; padding: 8px; }
+.pipeline-details summary { cursor: pointer; font-weight: 900; color: #1d4ed8; }
+.pipeline-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 8px 0; }
+.pipeline-grid div { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; display: grid; gap: 3px; }
+.pipeline-grid span { color: #64748b; font-size: 0.68rem; text-transform: uppercase; }
+.risk-list { margin: 8px 0; color: #9a3412; }
 .raw-grid { display: grid; gap: 10px; }
 .raw-details { border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; overflow: hidden; }
 .raw-details summary { cursor: pointer; padding: 12px 14px; font-weight: 900; color: #0f172a; }

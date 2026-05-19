@@ -21,8 +21,14 @@ pub struct TradeSignal {
     pub limit_price: Option<f64>,
     pub timestamp: DateTime<Utc>,
     pub reasoning: String,
+    /// Canonical confidence for the final execution decision, 0.0 to 1.0.
+    /// This must match any confidence stated in `reasoning`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
+    /// Machine-readable audit payload for scoring, regime adjustment, risk gates,
+    /// and order-sizing inputs. Frontends should prefer this over parsing text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------

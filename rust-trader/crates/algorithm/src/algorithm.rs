@@ -164,6 +164,10 @@ impl TradingAlgorithm {
                         timestamp: Utc::now(),
                         reasoning: format!("Claude error: {}", e),
                         confidence: None,
+                        audit: Some(serde_json::json!({
+                            "pipeline": "external_llm_error",
+                            "risk_gate": { "passed": false, "reason": "external model error" }
+                        })),
                     }
                 }),
             None => {

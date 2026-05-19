@@ -367,6 +367,7 @@ async fn exec_buy(State(s): State<Arc<AppState>>, Path(sym): Path<String>) -> im
         timestamp: chrono::Utc::now(),
         reasoning: "Manual".into(),
         confidence: None,
+        audit: Some(serde_json::json!({"pipeline":"manual_http_execute","action":"buy"})),
     };
     persist_manual_decision(&s, &sig);
     match s.algo.execute_trade(&sig).await {
@@ -383,6 +384,7 @@ async fn exec_sell(State(s): State<Arc<AppState>>, Path(sym): Path<String>) -> i
         timestamp: chrono::Utc::now(),
         reasoning: "Manual".into(),
         confidence: None,
+        audit: Some(serde_json::json!({"pipeline":"manual_http_execute","action":"sell"})),
     };
     persist_manual_decision(&s, &sig);
     match s.algo.execute_trade(&sig).await {

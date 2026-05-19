@@ -106,13 +106,20 @@ impl ModelSignalClient {
             limit_price,
             timestamp: Utc::now(),
             reasoning: format!(
-                "model={} source=external_llm; {}",
+                "model={} source=external_llm; confidence={}; {}",
                 DEFAULT_ANTHROPIC_MODEL,
+                confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "unknown".to_string()),
                 parsed
                     .reasoning
                     .unwrap_or_else(|| "model returned no reasoning".to_string())
             ),
             confidence,
+            audit: Some(json!({
+                "pipeline": "external_llm",
+                "canonical_confidence": confidence,
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "note": "confidence comes directly from clamped model JSON"
+            })),
         })
     }
 }

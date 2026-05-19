@@ -6,6 +6,7 @@
 
 use chrono::Utc;
 use go_trader_types::{MarketData, TradeSignal, SIGNAL_BUY, SIGNAL_HOLD, SIGNAL_SELL};
+use serde_json::json;
 
 use super::{Strategy, StrategyContext, StrategyVote};
 use crate::types::{PortfolioData, RiskParameters};
@@ -89,7 +90,7 @@ impl Arbitrator {
         symbol: &str,
         market_data: &MarketData,
         portfolio: &PortfolioData,
-        _risk: &RiskParameters,
+        risk: &RiskParameters,
         regime_name: &str,
         regime_multiplier: f64,
         indicators: &go_trader_indicators::IndicatorSet,
@@ -109,33 +110,51 @@ impl Arbitrator {
             portfolio_equity: portfolio.total_value,
         };
 
-        let (net_direction, confidence, votes) = self.aggregate(&ctx);
+        let (raw_net, confidence, votes) = self.aggregate(&ctx);
+        // Strategy implementations already apply regime-aware confidence dampening.
+        // Keep both names explicit so the API exposes the full scoring pipeline.
+        let adjusted_net = raw_net;
 
         let vote_summary: Vec<String> = votes
             .iter()
             .map(|v| format!("{}: {} ({:.0}%)", v.strategy_name, v.reason, v.confidence * 100.0))
             .collect();
 
-        let (signal, final_confidence, reason_prefix) =
-            if net_direction > BUY_THRESHOLD && confidence >= MIN_CONFIDENCE_FOR_ACTION {
+        let (pre_risk_signal, final_confidence, reason_prefix) =
+            if adjusted_net > BUY_THRESHOLD && confidence >= MIN_CONFIDENCE_FOR_ACTION {
                 (
                     SIGNAL_BUY,
                     confidence,
-                    format!("MULTI-STRATEGY BUY (net={:+.02}, conf={:.0}%): ", net_direction, confidence * 100.0),
+                    format!("MULTI-STRATEGY BUY (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
                 )
-            } else if net_direction < SELL_THRESHOLD && confidence >= MIN_CONFIDENCE_FOR_ACTION {
+            } else if adjusted_net < SELL_THRESHOLD && confidence >= MIN_CONFIDENCE_FOR_ACTION {
                 (
                     SIGNAL_SELL,
                     confidence,
-                    format!("MULTI-STRATEGY SELL (net={:+.02}, conf={:.0}%): ", net_direction, confidence * 100.0),
+                    format!("MULTI-STRATEGY SELL (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
                 )
             } else {
                 (
                     SIGNAL_HOLD,
                     confidence,
-                    format!("MULTI-STRATEGY HOLD (net={:+.02}, conf={:.0}%): ", net_direction, confidence * 100.0),
+                    format!("MULTI-STRATEGY HOLD (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
                 )
             };
+
+        let risk_gate = risk_gate_json(
+            pre_risk_signal,
+            confidence,
+            adjusted_net,
+            portfolio,
+            symbol,
+            risk,
+            MIN_CONFIDENCE_FOR_ACTION,
+        );
+        let blocks_order = risk_gate
+            .get("blocks_order")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let signal = if blocks_order { SIGNAL_HOLD } else { pre_risk_signal };
 
         let regime_label = if regime_name.is_empty() { "UNSET" } else { regime_name };
         let reasoning = format!(
@@ -143,6 +162,18 @@ impl Arbitrator {
             reason_prefix, regime_label, regime_multiplier,
             vote_summary.join("; "),
         );
+
+        let vote_audit: Vec<_> = votes.iter().map(|v| {
+            let weight = self.strategies.iter().find(|s| s.name() == v.strategy_name).map(|s| s.weight()).unwrap_or(1.0);
+            json!({
+                "strategy": v.strategy_name,
+                "direction": v.direction,
+                "confidence": v.confidence,
+                "weight": weight,
+                "weighted_score": v.direction * v.confidence * weight,
+                "reason": v.reason,
+            })
+        }).collect();
 
         TradeSignal {
             symbol: symbol.into(),
@@ -155,12 +186,117 @@ impl Arbitrator {
             },
             timestamp: Utc::now(),
             reasoning: format!(
-                "Arbitrator: {}; source=multi_strategy; strategies={}",
-                reasoning, self.strategies.len()
+                "Arbitrator: {}; source=multi_strategy; strategies={}; action_thresholds=buy>{:.2}/sell<{:.2}/conf>={:.0}%{}",
+                reasoning,
+                self.strategies.len(),
+                BUY_THRESHOLD,
+                SELL_THRESHOLD,
+                MIN_CONFIDENCE_FOR_ACTION * 100.0,
+                if blocks_order { "; risk_gate=blocked" } else { "" }
             ),
             confidence: Some(final_confidence),
+            audit: Some(json!({
+                "pipeline": "multi_strategy_arbitrator",
+                "raw_strategy_scores": vote_audit,
+                "normalized_scores": {
+                    "raw_net": raw_net,
+                    "adjusted_net": adjusted_net,
+                    "canonical_confidence": final_confidence,
+                    "total_strategy_weight": self.strategies.iter().map(|s| s.weight()).sum::<f64>()
+                },
+                "regime_adjustment": {
+                    "regime_name": regime_label,
+                    "regime_multiplier": regime_multiplier,
+                    "note": "strategy confidences are regime-adjusted before aggregation"
+                },
+                "confidence_calculation": {
+                    "canonical_confidence": final_confidence,
+                    "source": "same weighted aggregate displayed in reasoning text"
+                },
+                "risk_units": risk_units_json(risk),
+                "risk_gate": risk_gate,
+                "action_threshold": {
+                    "buy_net_gt": BUY_THRESHOLD,
+                    "sell_net_lt": SELL_THRESHOLD,
+                    "min_confidence_for_action": MIN_CONFIDENCE_FOR_ACTION,
+                    "auto_trade_min_confidence": 0.65
+                },
+                "order_sizing": order_sizing_json(market_data.price, portfolio, risk, regime_multiplier, final_confidence),
+                "execution_decision": {
+                    "pre_risk_action": pre_risk_signal,
+                    "final_action": signal,
+                    "limit_price": if signal == SIGNAL_BUY || signal == SIGNAL_SELL { Some(market_data.price) } else { None }
+                }
+            })),
         }
     }
+}
+
+fn risk_units_json(risk: &RiskParameters) -> serde_json::Value {
+    json!({
+        "max_position_size_percent": { "value": risk.max_position_size_percent, "unit": "percent_of_portfolio_equity" },
+        "max_account_allocation": { "value": risk.max_account_allocation, "unit": "percent_of_portfolio_equity" },
+        "stop_loss_percent": { "value": risk.stop_loss_percent, "unit": "percent_move_from_entry" },
+        "take_profit_percent": { "value": risk.take_profit_percent, "unit": "percent_move_from_entry" },
+        "daily_loss_limit": { "value": risk.daily_loss_limit, "unit": "percent_of_starting_day_equity" },
+        "max_open_positions": { "value": risk.max_open_positions, "unit": "count" },
+        "max_daily_trades": { "value": risk.max_daily_trades, "unit": "count" }
+    })
+}
+
+fn risk_gate_json(
+    signal: &str,
+    confidence: f64,
+    adjusted_net: f64,
+    portfolio: &PortfolioData,
+    symbol: &str,
+    risk: &RiskParameters,
+    min_confidence: f64,
+) -> serde_json::Value {
+    let equity = portfolio.total_value;
+    let current_position_value = portfolio.positions.get(symbol).map(|p| p.market_val.abs()).unwrap_or(0.0);
+    let current_position_pct = if equity > f64::EPSILON { current_position_value / equity * 100.0 } else { 0.0 };
+    let mut violations = Vec::new();
+    if current_position_pct > risk.max_position_size_percent {
+        violations.push(format!(
+            "current {} exposure {:.2}% exceeds max_position_size_percent {:.2}% (grandfathered; blocks new buys)",
+            symbol, current_position_pct, risk.max_position_size_percent
+        ));
+    }
+    if portfolio.positions.len() >= risk.max_open_positions && signal == SIGNAL_BUY && current_position_value <= f64::EPSILON {
+        violations.push(format!("max_open_positions {} reached", risk.max_open_positions));
+    }
+    if confidence < min_confidence && signal != SIGNAL_HOLD {
+        violations.push(format!("confidence {:.0}% below action minimum {:.0}%", confidence * 100.0, min_confidence * 100.0));
+    }
+    let buy_below_threshold = signal == SIGNAL_BUY && adjusted_net <= BUY_THRESHOLD;
+    let sell_below_threshold = signal == SIGNAL_SELL && adjusted_net >= SELL_THRESHOLD;
+    if buy_below_threshold || sell_below_threshold {
+        violations.push(format!("adjusted net {:+.2} below directional threshold", adjusted_net));
+    }
+    let blocks_order = signal == SIGNAL_BUY && current_position_pct > risk.max_position_size_percent;
+    json!({
+        "passed": violations.is_empty() || !blocks_order,
+        "blocks_order": blocks_order,
+        "violations": violations,
+        "current_position_pct": current_position_pct,
+        "grandfathered_existing_exposure": current_position_pct > risk.max_position_size_percent,
+        "note": "existing exposure violations are displayed and block additional buys, but do not force liquidation"
+    })
+}
+
+fn order_sizing_json(price: f64, portfolio: &PortfolioData, risk: &RiskParameters, regime_multiplier: f64, confidence: f64) -> serde_json::Value {
+    let equity = portfolio.total_value;
+    let max_position_value = equity * (risk.max_position_size_percent / 100.0);
+    let regime_adjusted_value = max_position_value * regime_multiplier * confidence;
+    let estimated_qty = if price > f64::EPSILON { (regime_adjusted_value / price).floor() } else { 0.0 };
+    json!({
+        "equity": equity,
+        "max_position_value": max_position_value,
+        "regime_adjusted_value": regime_adjusted_value,
+        "estimated_qty": estimated_qty,
+        "formula": "floor(equity * max_position_size_percent / 100 * regime_multiplier * confidence / price)"
+    })
 }
 
 #[cfg(test)]

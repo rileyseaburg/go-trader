@@ -98,10 +98,24 @@ impl RuleBasedSignalEngine {
             },
             timestamp: Utc::now(),
             reasoning: format!(
-                "RuleBasedSignalEngine: {}; source=local_deterministic; external_llm=false",
-                reason
+                "RuleBasedSignalEngine: {}; source=local_deterministic; confidence={:.0}%; external_llm=false",
+                reason,
+                confidence * 100.0
             ),
             confidence: Some(confidence),
+            audit: Some(serde_json::json!({
+                "pipeline": "local_rule_engine",
+                "canonical_confidence": confidence,
+                "raw_inputs": {
+                    "price": price,
+                    "change_24h": change,
+                    "has_position": has_position,
+                    "regime_name": printable_regime(regime_name),
+                    "regime_multiplier": regime_multiplier
+                },
+                "risk_units": risk_units_json(risk),
+                "decision": { "action": signal, "reason": reason }
+            })),
         }
     }
 }
@@ -112,6 +126,18 @@ fn printable_regime(regime_name: &str) -> &str {
     } else {
         regime_name
     }
+}
+
+fn risk_units_json(risk: &RiskParameters) -> serde_json::Value {
+    serde_json::json!({
+        "max_position_size_percent": { "value": risk.max_position_size_percent, "unit": "percent_of_portfolio_equity" },
+        "max_account_allocation": { "value": risk.max_account_allocation, "unit": "percent_of_portfolio_equity" },
+        "stop_loss_percent": { "value": risk.stop_loss_percent, "unit": "percent_move_from_entry" },
+        "take_profit_percent": { "value": risk.take_profit_percent, "unit": "percent_move_from_entry" },
+        "daily_loss_limit": { "value": risk.daily_loss_limit, "unit": "percent_of_starting_day_equity" },
+        "max_open_positions": { "value": risk.max_open_positions, "unit": "count" },
+        "max_daily_trades": { "value": risk.max_daily_trades, "unit": "count" }
+    })
 }
 
 #[cfg(test)]
