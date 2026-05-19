@@ -252,18 +252,24 @@ async fn main() {
             self.algo
                 .update_market_data(symbol, price, high, low, volume, change);
 
-            // Push bar into buffer for indicator computation.
-            if data.bar.is_some() {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let bar = go_trader_indicators::Bar {
-                    timestamp: now_ms,
-                    open: price, // approximate from trade price
-                    high,
-                    low,
-                    close: price,
-                    volume,
-                };
-                self.buf.push(symbol, bar);
+            // Push the actual Alpaca snapshot bar into the indicator buffer.
+            // Do not synthesize a new bar on every poll: after-hours/latest-trade
+            // prices can be unchanged for long periods, and repeated synthetic
+            // bars flatten volatility/ADX into permanent HOLD signals.
+            if let Some(snapshot_bar) = data.bar.as_ref() {
+                if let Some(timestamp) = parse_alpaca_timestamp(&snapshot_bar.timestamp) {
+                    let bar = go_trader_indicators::Bar {
+                        timestamp,
+                        open: snapshot_bar.open,
+                        high: snapshot_bar.high,
+                        low: snapshot_bar.low,
+                        close: snapshot_bar.close,
+                        volume: snapshot_bar.volume as f64,
+                    };
+                    self.buf.push(symbol, bar);
+                } else {
+                    warn!(symbol, timestamp = snapshot_bar.timestamp, "Skipping indicator bar with unparsable Alpaca timestamp");
+                }
             }
 
             let prev = self.pt.read().unwrap().get(symbol).copied().unwrap_or(0.0);
@@ -634,6 +640,13 @@ fn json_string(v: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
+fn parse_alpaca_timestamp(timestamp: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|dt| dt.timestamp())
+        .ok()
+        .or_else(|| timestamp.parse::<i64>().ok())
+}
+
 async fn snapshot_regime_state(
     trading_algo: &Arc<TradingAlgorithm>,
     feed_cache: &Arc<Option<cartography::feed::FeedCache>>,
@@ -771,5 +784,15 @@ mod tests {
         );
         let stale_utc_early_slot = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 15, 30, 0).unwrap();
         assert!(regime_snapshot_market_slot_id(stale_utc_early_slot).is_none());
+    }
+
+    #[test]
+    fn alpaca_snapshot_timestamp_parses_rfc3339_and_epoch_seconds() {
+        assert_eq!(
+            parse_alpaca_timestamp("2026-05-18T20:00:00.000970569Z"),
+            Some(1_779_134_400)
+        );
+        assert_eq!(parse_alpaca_timestamp("1779134400"), Some(1_779_134_400));
+        assert_eq!(parse_alpaca_timestamp("not-a-timestamp"), None);
     }
 }
