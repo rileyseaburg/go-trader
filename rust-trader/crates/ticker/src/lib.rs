@@ -16,6 +16,7 @@ const MIN_MARKET_DATA_POLL_SECS: u64 = 5;
 const ALPACA_MARKET_DATA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 const STREAM_RECONNECT_INITIAL_SECS: u64 = 5;
 const STREAM_RECONNECT_MAX_SECS: u64 = 300;
+const STREAM_FRESH_SKIP_MULTIPLIER: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -176,13 +177,17 @@ impl TickerServer {
                 }
                 if mock_mode {
                     mock_update(&syms, &last_data, &handler);
-                } else {
-                    if let Err(e) =
-                        alpaca_fetch(&http, &api_key, &api_secret, &syms, &last_data, &handler)
-                            .await
-                    {
-                        warn!("ALPACA_MARKET_DATA_FETCH_FAILED: {}", e);
-                    }
+                } else if stream_data_is_fresh(&last_data, &syms, poll_interval) {
+                    debug!(
+                        symbols = syms.len(),
+                        max_age_secs =
+                            poll_interval.as_secs() * STREAM_FRESH_SKIP_MULTIPLIER as u64,
+                        "Skipping Alpaca REST snapshot refresh because stream data is fresh"
+                    );
+                } else if let Err(e) =
+                    alpaca_fetch(&http, &api_key, &api_secret, &syms, &last_data, &handler).await
+                {
+                    warn!("ALPACA_MARKET_DATA_FETCH_FAILED: {}", e);
                 }
             }
         });
@@ -305,6 +310,26 @@ async fn alpaca_fetch(
         "Alpaca market data snapshots refreshed"
     );
     Ok(())
+}
+
+fn stream_data_is_fresh(
+    last_data: &Arc<RwLock<HashMap<String, TickerData>>>,
+    symbols: &[String],
+    poll_interval: Duration,
+) -> bool {
+    if symbols.is_empty() {
+        return false;
+    }
+    let max_age =
+        chrono::Duration::from_std(poll_interval.saturating_mul(STREAM_FRESH_SKIP_MULTIPLIER))
+            .unwrap_or_else(|_| chrono::Duration::seconds(i64::MAX));
+    let now = Utc::now();
+    let data = last_data.read().unwrap();
+    symbols.iter().all(|symbol| {
+        data.get(symbol)
+            .map(|ticker| now.signed_duration_since(ticker.last_updated) <= max_age)
+            .unwrap_or(false)
+    })
 }
 
 fn market_data_poll_interval() -> Duration {
