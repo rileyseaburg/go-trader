@@ -49,6 +49,12 @@ spec:
               value: "15"
             - name: GO_TRADER_MARKET_DATA_STREAM_ENABLED
               value: "true"
+            - name: GO_TRADER_SEED_BAR_COUNT
+              value: "220"
+            - name: GO_TRADER_SEED_BAR_DELAY_MS
+              value: "1000"
+            - name: GO_TRADER_SEED_BAR_MAX_RETRIES
+              value: "5"
             - name: GO_TRADER_EVENT_DRIVEN_AUTO_TRADE
               value: "true"
             - name: GO_TRADER_EVENT_EVAL_INTERVAL_SECS

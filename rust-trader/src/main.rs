@@ -37,6 +37,9 @@ const REGIME_SNAPSHOT_CHECK_SECS: u64 = 60;
 // local New York times remain 09:30/10:30/14:30/16:55 across EST/EDT changes;
 // chrono-tz handles the corresponding UTC offset.
 const REGIME_SNAPSHOT_MARKET_TIMES_ET: [(u32, u32); 4] = [(9, 30), (10, 30), (14, 30), (16, 55)];
+const DEFAULT_SEED_BAR_COUNT: u32 = 220;
+const DEFAULT_SEED_BAR_DELAY_MS: u64 = 750;
+const DEFAULT_SEED_BAR_MAX_RETRIES: u32 = 3;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -692,20 +695,31 @@ async fn seed_bar_buffer(
     buf: &Arc<BarBuffer>,
     symbols: &[String],
 ) {
-    // 300 five-minute bars = ~1 trading day of data, enough for all indicators
-    // including 200-SMA.
-    const BAR_COUNT: u32 = 300;
+    // 220 five-minute bars is enough for the 200-SMA with headroom while keeping
+    // startup REST pressure lower.  Market-data WebSockets keep the buffer fresh
+    // after this seed step.
+    let bar_count = env_u32("GO_TRADER_SEED_BAR_COUNT", DEFAULT_SEED_BAR_COUNT).max(200);
+    let inter_symbol_delay = Duration::from_millis(env_u64(
+        "GO_TRADER_SEED_BAR_DELAY_MS",
+        DEFAULT_SEED_BAR_DELAY_MS,
+    ));
+    let max_retries = env_u32(
+        "GO_TRADER_SEED_BAR_MAX_RETRIES",
+        DEFAULT_SEED_BAR_MAX_RETRIES,
+    );
     const TIMEFRAME: &str = "5Min";
 
-    for symbol in symbols {
-        match alpaca_client.get_bars(symbol, TIMEFRAME, BAR_COUNT).await {
+    for (idx, symbol) in symbols.iter().enumerate() {
+        if idx > 0 && !inter_symbol_delay.is_zero() {
+            tokio::time::sleep(inter_symbol_delay).await;
+        }
+        match get_bars_with_retry(alpaca_client, symbol, TIMEFRAME, bar_count, max_retries).await {
             Ok(bars) => {
-                for bar in &bars {
-                    buf.push(symbol, bar.clone());
-                }
+                buf.load_bars(symbol, bars.clone());
                 info!(
                     symbol,
                     bars = bars.len(),
+                    bar_count,
                     "Seeded bar buffer with historical bars"
                 );
             }
@@ -714,6 +728,48 @@ async fn seed_bar_buffer(
             }
         }
     }
+}
+
+async fn get_bars_with_retry(
+    alpaca_client: &AlpacaRestClient,
+    symbol: &str,
+    timeframe: &str,
+    limit: u32,
+    max_retries: u32,
+) -> Result<Vec<go_trader_indicators::Bar>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut attempt = 0_u32;
+    loop {
+        match alpaca_client.get_bars(symbol, timeframe, limit).await {
+            Ok(bars) => return Ok(bars),
+            Err(e) if attempt < max_retries && e.to_string().contains("429") => {
+                attempt += 1;
+                let delay = Duration::from_secs(2_u64.saturating_pow(attempt));
+                warn!(
+                    symbol,
+                    attempt,
+                    max_retries,
+                    delay_ms = delay.as_millis(),
+                    "HISTORICAL_BARS_RATE_LIMITED: retrying after Alpaca 429"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 fn is_actionable_signal(signal: &TradeSignal) -> bool {
