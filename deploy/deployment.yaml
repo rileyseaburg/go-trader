@@ -39,6 +39,14 @@ spec:
           image: us-central1-docker.pkg.dev/spotlessbinco/spotlessbinco/go-trader:placeholder
           imagePullPolicy: IfNotPresent
           args: ["--port", "8080", "--auto-trade", "--symbols", "AAPL,MSFT,TSLA,CBRS", "--db-path", "/app/data/go-trader.sqlite3"]
+          env:
+            # Software low-latency mode: tighter scan/feed cadence while staying
+            # inside Alpaca API/broker constraints. This is still paper/API
+            # trading, not FPGA/direct-market-access execution.
+            - name: GO_TRADER_AUTO_TRADE_INTERVAL_SECS
+              value: "15"
+            - name: GO_TRADER_MARKET_DATA_INTERVAL_SECS
+              value: "1"
           ports:
             - name: http
               containerPort: 8080

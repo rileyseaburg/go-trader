@@ -5,7 +5,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
+use tokio::task::JoinSet;
 use tracing::{info, warn};
+
+const DEFAULT_MARKET_DATA_POLL_SECS: u64 = 5;
+const MIN_MARKET_DATA_POLL_SECS: u64 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -56,6 +61,7 @@ pub struct TickerServer {
     mock_mode: bool,
     running: Arc<RwLock<bool>>,
     http: reqwest::Client,
+    poll_interval: Duration,
 }
 
 impl TickerServer {
@@ -72,6 +78,7 @@ impl TickerServer {
             mock_mode: mock,
             running: Arc::new(RwLock::new(false)),
             http: reqwest::Client::new(),
+            poll_interval: market_data_poll_interval(),
         }
     }
 
@@ -91,8 +98,10 @@ impl TickerServer {
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
         let mock_mode = self.mock_mode;
+        let poll_interval = self.poll_interval;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            let mut interval = tokio::time::interval(poll_interval);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 if !*running.read().unwrap() {
@@ -200,8 +209,21 @@ async fn alpaca_fetch(
     last_data: &Arc<RwLock<HashMap<String, TickerData>>>,
     handler: &Arc<RwLock<Option<Box<dyn DataHandler>>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    for sym in symbols {
-        let (trade, quote, bar) = fetch_snapshot(http, api_key, api_secret, sym).await?;
+    let started = Instant::now();
+    let mut fetches = JoinSet::new();
+    for sym in symbols.iter().cloned() {
+        let http = http.clone();
+        let api_key = api_key.to_string();
+        let api_secret = api_secret.to_string();
+        fetches.spawn(async move {
+            let result = fetch_snapshot(&http, &api_key, &api_secret, &sym).await;
+            (sym, result)
+        });
+    }
+
+    while let Some(joined) = fetches.join_next().await {
+        let (sym, result) = joined?;
+        let (trade, quote, bar) = result?;
         let data = TickerData {
             symbol: sym.clone(),
             trade: Some(trade),
@@ -211,10 +233,24 @@ async fn alpaca_fetch(
         };
         last_data.write().unwrap().insert(sym.clone(), data.clone());
         if let Some(ref h) = *handler.read().unwrap() {
-            h.handle(sym, &data);
+            h.handle(&sym, &data);
         }
     }
+    info!(
+        symbols = symbols.len(),
+        latency_ms = started.elapsed().as_millis(),
+        "Alpaca market data snapshots refreshed"
+    );
     Ok(())
+}
+
+fn market_data_poll_interval() -> Duration {
+    let secs = std::env::var("GO_TRADER_MARKET_DATA_INTERVAL_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MARKET_DATA_POLL_SECS)
+        .max(MIN_MARKET_DATA_POLL_SECS);
+    Duration::from_secs(secs)
 }
 
 async fn fetch_snapshot(
