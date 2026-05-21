@@ -7,6 +7,7 @@ mod bar_buffer;
 mod http_handlers;
 
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::America::New_York;
@@ -14,11 +15,11 @@ use clap::Parser;
 use tracing::{error, info, warn};
 
 use go_trader_algorithm::{PositionData, TradingAlgorithm};
+use go_trader_backtest::{BacktestConfig, BacktestEngine};
 use go_trader_cartography::{self as cartography, Reading};
 use go_trader_notification::NotificationManager;
 use go_trader_ticker::{change_from_snapshot, DataHandler, TickerData, TickerServer};
 use go_trader_types::TradeSignal;
-use go_trader_backtest::{BacktestEngine, BacktestConfig};
 
 use crate::{
     alpaca_rest::AlpacaRestClient,
@@ -74,6 +75,23 @@ struct Args {
         default_value_t = 300
     )]
     auto_trade_interval_secs: u64,
+    /// Also evaluate the touched symbol immediately after each market-data refresh.
+    #[arg(
+        long,
+        env = "GO_TRADER_EVENT_DRIVEN_AUTO_TRADE",
+        default_value_t = false
+    )]
+    event_driven_auto_trade: bool,
+    /// Minimum seconds between event-driven signal evaluations per symbol.
+    #[arg(long, env = "GO_TRADER_EVENT_EVAL_INTERVAL_SECS", default_value_t = 5)]
+    event_eval_interval_secs: u64,
+    /// Minimum seconds between event-driven order attempts per symbol.
+    #[arg(
+        long,
+        env = "GO_TRADER_EVENT_ORDER_COOLDOWN_SECS",
+        default_value_t = 60
+    )]
+    event_order_cooldown_secs: u64,
     /// Run historical backtest instead of live trading.
     #[arg(long, default_value_t = false)]
     backtest: bool,
@@ -236,11 +254,24 @@ async fn main() {
     let notif_clone = notification_mgr.clone();
     let pt_clone = price_tracker.clone();
     let buf_clone = bar_buffer.clone();
+    let event_evaluator = if args.auto_trade && args.event_driven_auto_trade {
+        Some(EventDrivenEvaluator::new(
+            trading_algo.clone(),
+            audit.clone(),
+            bar_buffer.clone(),
+            args.dry_run,
+            Duration::from_secs(args.event_eval_interval_secs.max(1)),
+            Duration::from_secs(args.event_order_cooldown_secs.max(15)),
+        ))
+    } else {
+        None
+    };
     struct Handler {
         algo: Arc<TradingAlgorithm>,
         notif: Arc<NotificationManager>,
         pt: Arc<RwLock<std::collections::HashMap<String, f64>>>,
         buf: Arc<BarBuffer>,
+        event_evaluator: Option<EventDrivenEvaluator>,
     }
     impl DataHandler for Handler {
         fn handle(&self, symbol: &str, data: &TickerData) {
@@ -268,8 +299,16 @@ async fn main() {
                     };
                     self.buf.push(symbol, bar);
                 } else {
-                    warn!(symbol, timestamp = snapshot_bar.timestamp, "Skipping indicator bar with unparsable Alpaca timestamp");
+                    warn!(
+                        symbol,
+                        timestamp = snapshot_bar.timestamp,
+                        "Skipping indicator bar with unparsable Alpaca timestamp"
+                    );
                 }
+            }
+
+            if let Some(evaluator) = &self.event_evaluator {
+                evaluator.on_market_data(symbol);
             }
 
             let prev = self.pt.read().unwrap().get(symbol).copied().unwrap_or(0.0);
@@ -303,6 +342,7 @@ async fn main() {
         notif: notif_clone,
         pt: pt_clone,
         buf: buf_clone,
+        event_evaluator,
     }));
 
     // Start ticker
@@ -376,10 +416,14 @@ async fn main() {
 }
 
 async fn run_backtest(args: Args) {
-    let api_key = args.alpaca_key.clone()
+    let api_key = args
+        .alpaca_key
+        .clone()
         .or_else(|| std::env::var("PAPER_ALPACA_API_KEY").ok())
         .unwrap_or_default();
-    let api_secret = args.alpaca_secret.clone()
+    let api_secret = args
+        .alpaca_secret
+        .clone()
         .or_else(|| std::env::var("PAPER_ALPACA_SECRET_KEY").ok())
         .or_else(|| std::env::var("PAPAER_ALPACA_SECRET_KEY").ok())
         .unwrap_or_default();
@@ -389,7 +433,11 @@ async fn run_backtest(args: Args) {
     }
     let base_url = if args.paper { PAPER_URL } else { LIVE_URL }.to_string();
     let client = AlpacaRestClient::new(api_key, api_secret, base_url);
-    let symbols: Vec<String> = args.symbols.split(',').map(|s| s.trim().to_string()).collect();
+    let symbols: Vec<String> = args
+        .symbols
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
     let timeframe = "5Min";
     let config = BacktestConfig {
         starting_equity: args.backtest_equity,
@@ -397,7 +445,11 @@ async fn run_backtest(args: Args) {
         ..Default::default()
     };
     for symbol in &symbols {
-        info!(symbol, bars = args.backtest_bars, "Fetching historical bars for backtest");
+        info!(
+            symbol,
+            bars = args.backtest_bars,
+            "Fetching historical bars for backtest"
+        );
         match client.get_bars(symbol, timeframe, args.backtest_bars).await {
             Ok(bars) => {
                 info!(symbol, count = bars.len(), "Running backtest");
@@ -415,6 +467,89 @@ async fn run_backtest(args: Args) {
             }
             Err(e) => error!(symbol, "Failed to fetch bars: {}", e),
         }
+    }
+}
+
+#[derive(Clone)]
+struct EventDrivenEvaluator {
+    trading_algo: Arc<TradingAlgorithm>,
+    audit: AuditStore,
+    bar_buffer: Arc<BarBuffer>,
+    dry_run: bool,
+    eval_interval: Duration,
+    order_cooldown: Duration,
+    last_eval: Arc<RwLock<std::collections::HashMap<String, Instant>>>,
+    last_order_attempt: Arc<RwLock<std::collections::HashMap<String, Instant>>>,
+}
+
+impl EventDrivenEvaluator {
+    fn new(
+        trading_algo: Arc<TradingAlgorithm>,
+        audit: AuditStore,
+        bar_buffer: Arc<BarBuffer>,
+        dry_run: bool,
+        eval_interval: Duration,
+        order_cooldown: Duration,
+    ) -> Self {
+        info!(
+            eval_interval_secs = eval_interval.as_secs(),
+            order_cooldown_secs = order_cooldown.as_secs(),
+            dry_run,
+            "Event-driven auto-trade evaluation enabled"
+        );
+        Self {
+            trading_algo,
+            audit,
+            bar_buffer,
+            dry_run,
+            eval_interval,
+            order_cooldown,
+            last_eval: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            last_order_attempt: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    fn on_market_data(&self, symbol: &str) {
+        let now = Instant::now();
+        {
+            let mut last_eval = self.last_eval.write().unwrap();
+            if last_eval
+                .get(symbol)
+                .is_some_and(|last| now.duration_since(*last) < self.eval_interval)
+            {
+                return;
+            }
+            last_eval.insert(symbol.to_string(), now);
+        }
+
+        let evaluator = self.clone();
+        let symbol = symbol.to_string();
+        tokio::spawn(async move {
+            let started = Instant::now();
+            let bars = evaluator.bar_buffer.get_bars(&symbol);
+            if bars.len() >= 20 {
+                let set = go_trader_indicators::compute_all(&bars);
+                evaluator.trading_algo.update_indicators(&symbol, set);
+            }
+
+            match evaluate_symbol_for_auto_trade_with_source(
+                &evaluator.trading_algo,
+                &evaluator.audit,
+                &symbol,
+                evaluator.dry_run,
+                "event_driven_market_data",
+                Some((&evaluator.last_order_attempt, evaluator.order_cooldown)),
+            )
+            .await
+            {
+                Ok(()) => info!(
+                    symbol,
+                    latency_ms = started.elapsed().as_millis(),
+                    "Event-driven auto-trade evaluation completed"
+                ),
+                Err(e) => warn!(symbol, "EVENT_DRIVEN_AUTO_TRADE_EVALUATION_FAILED: {}", e),
+            }
+        });
     }
 }
 
@@ -459,6 +594,28 @@ async fn evaluate_symbol_for_auto_trade(
     symbol: &str,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    evaluate_symbol_for_auto_trade_with_source(
+        trading_algo,
+        audit,
+        symbol,
+        dry_run,
+        "auto_trade_loop",
+        None,
+    )
+    .await
+}
+
+async fn evaluate_symbol_for_auto_trade_with_source(
+    trading_algo: &Arc<TradingAlgorithm>,
+    audit: &AuditStore,
+    symbol: &str,
+    dry_run: bool,
+    source: &str,
+    order_cooldown: Option<(
+        &Arc<RwLock<std::collections::HashMap<String, Instant>>>,
+        Duration,
+    )>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let signal = trading_algo.process_symbol(symbol).await?;
     let signal_id = audit.record_signal(&signal)?;
     audit.record_decision(DecisionRecord {
@@ -466,7 +623,7 @@ async fn evaluate_symbol_for_auto_trade(
         action: &signal.signal,
         reason: &signal.reasoning,
         governance: serde_json::json!({
-            "source": "auto_trade_loop",
+            "source": source,
             "regime_name": trading_algo.get_regime_name(),
             "regime_multiplier": trading_algo.get_regime_multiplier(),
             "dry_run": dry_run,
@@ -474,6 +631,23 @@ async fn evaluate_symbol_for_auto_trade(
     })?;
 
     if is_actionable_signal(&signal) {
+        if let Some((last_order_attempt, cooldown)) = order_cooldown {
+            let now = Instant::now();
+            let mut attempts = last_order_attempt.write().unwrap();
+            if attempts
+                .get(symbol)
+                .is_some_and(|last| now.duration_since(*last) < cooldown)
+            {
+                info!(
+                    symbol,
+                    action = signal.signal,
+                    cooldown_secs = cooldown.as_secs(),
+                    "Event-driven actionable signal suppressed by order cooldown"
+                );
+                return Ok(());
+            }
+            attempts.insert(symbol.to_string(), now);
+        }
         match trading_algo.execute_trade(&signal).await {
             Ok(message) => info!(
                 symbol,
@@ -536,10 +710,7 @@ async fn seed_bar_buffer(
                 );
             }
             Err(e) => {
-                warn!(
-                    symbol,
-                    "HISTORICAL_BARS_FETCH_FAILED: {}: {}", TIMEFRAME, e
-                );
+                warn!(symbol, "HISTORICAL_BARS_FETCH_FAILED: {}: {}", TIMEFRAME, e);
             }
         }
     }

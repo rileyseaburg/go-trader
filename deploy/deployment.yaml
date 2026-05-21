@@ -47,6 +47,12 @@ spec:
               value: "15"
             - name: GO_TRADER_MARKET_DATA_INTERVAL_SECS
               value: "1"
+            - name: GO_TRADER_EVENT_DRIVEN_AUTO_TRADE
+              value: "true"
+            - name: GO_TRADER_EVENT_EVAL_INTERVAL_SECS
+              value: "5"
+            - name: GO_TRADER_EVENT_ORDER_COOLDOWN_SECS
+              value: "60"
           ports:
             - name: http
               containerPort: 8080
