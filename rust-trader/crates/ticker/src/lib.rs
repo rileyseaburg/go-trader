@@ -147,13 +147,13 @@ impl TickerServer {
                             )
                         };
                         warn!(
-                            reconnect_delay_secs = reconnect_delay.as_secs(),
-                            next_reconnect_delay_secs = next_reconnect_delay.as_secs(),
+                            previous_reconnect_delay_secs = reconnect_delay.as_secs(),
+                            reconnect_delay_secs = next_reconnect_delay.as_secs(),
                             "ALPACA_MARKET_DATA_STREAM_FAILED: {}",
                             error
                         );
-                        tokio::time::sleep(reconnect_delay).await;
                         reconnect_delay = next_reconnect_delay;
+                        tokio::time::sleep(reconnect_delay).await;
                         continue;
                     }
                 }
