@@ -16,6 +16,7 @@ const MIN_MARKET_DATA_POLL_SECS: u64 = 5;
 const ALPACA_MARKET_DATA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 const STREAM_RECONNECT_INITIAL_SECS: u64 = 5;
 const STREAM_RECONNECT_MAX_SECS: u64 = 300;
+const STREAM_CONNECTION_LIMIT_BACKOFF_SECS: u64 = 1800;
 const STREAM_FRESH_SKIP_MULTIPLIER: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,15 +137,23 @@ impl TickerServer {
                         reconnect_delay = Duration::from_secs(STREAM_RECONNECT_INITIAL_SECS);
                     }
                     Err(e) => {
+                        let error = e.to_string();
+                        let next_reconnect_delay = if is_stream_connection_limit_error(&error) {
+                            market_data_stream_connection_limit_backoff()
+                        } else {
+                            std::cmp::min(
+                                reconnect_delay.saturating_mul(2),
+                                Duration::from_secs(STREAM_RECONNECT_MAX_SECS),
+                            )
+                        };
                         warn!(
                             reconnect_delay_secs = reconnect_delay.as_secs(),
-                            "ALPACA_MARKET_DATA_STREAM_FAILED: {}", e
+                            next_reconnect_delay_secs = next_reconnect_delay.as_secs(),
+                            "ALPACA_MARKET_DATA_STREAM_FAILED: {}",
+                            error
                         );
                         tokio::time::sleep(reconnect_delay).await;
-                        reconnect_delay = std::cmp::min(
-                            reconnect_delay.saturating_mul(2),
-                            Duration::from_secs(STREAM_RECONNECT_MAX_SECS),
-                        );
+                        reconnect_delay = next_reconnect_delay;
                         continue;
                     }
                 }
@@ -350,6 +359,19 @@ fn market_data_stream_enabled() -> bool {
             )
         })
         .unwrap_or(true)
+}
+
+fn market_data_stream_connection_limit_backoff() -> Duration {
+    let secs = std::env::var("GO_TRADER_MARKET_DATA_STREAM_CONNECTION_LIMIT_BACKOFF_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(STREAM_CONNECTION_LIMIT_BACKOFF_SECS)
+        .max(STREAM_RECONNECT_MAX_SECS);
+    Duration::from_secs(secs)
+}
+
+fn is_stream_connection_limit_error(error: &str) -> bool {
+    error.contains("connection limit exceeded") || error.contains("\"code\":406")
 }
 
 async fn alpaca_stream_market_data(
