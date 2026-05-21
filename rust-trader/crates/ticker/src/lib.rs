@@ -14,7 +14,8 @@ use tracing::{debug, info, warn};
 const DEFAULT_MARKET_DATA_POLL_SECS: u64 = 15;
 const MIN_MARKET_DATA_POLL_SECS: u64 = 5;
 const ALPACA_MARKET_DATA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
-const STREAM_RECONNECT_SECS: u64 = 5;
+const STREAM_RECONNECT_INITIAL_SECS: u64 = 5;
+const STREAM_RECONNECT_MAX_SECS: u64 = 300;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -109,13 +110,14 @@ impl TickerServer {
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
         tokio::spawn(async move {
+            let mut reconnect_delay = Duration::from_secs(STREAM_RECONNECT_INITIAL_SECS);
             loop {
                 if !*running.read().unwrap() {
                     break;
                 }
                 let syms = symbols.read().unwrap().clone();
                 if syms.is_empty() {
-                    tokio::time::sleep(Duration::from_secs(STREAM_RECONNECT_SECS)).await;
+                    tokio::time::sleep(reconnect_delay).await;
                     continue;
                 }
                 match alpaca_stream_market_data(
@@ -128,10 +130,24 @@ impl TickerServer {
                 )
                 .await
                 {
-                    Ok(()) => info!("Alpaca market data stream ended"),
-                    Err(e) => warn!("ALPACA_MARKET_DATA_STREAM_FAILED: {}", e),
+                    Ok(()) => {
+                        info!("Alpaca market data stream ended");
+                        reconnect_delay = Duration::from_secs(STREAM_RECONNECT_INITIAL_SECS);
+                    }
+                    Err(e) => {
+                        warn!(
+                            reconnect_delay_secs = reconnect_delay.as_secs(),
+                            "ALPACA_MARKET_DATA_STREAM_FAILED: {}", e
+                        );
+                        tokio::time::sleep(reconnect_delay).await;
+                        reconnect_delay = std::cmp::min(
+                            reconnect_delay.saturating_mul(2),
+                            Duration::from_secs(STREAM_RECONNECT_MAX_SECS),
+                        );
+                        continue;
+                    }
                 }
-                tokio::time::sleep(Duration::from_secs(STREAM_RECONNECT_SECS)).await;
+                tokio::time::sleep(reconnect_delay).await;
             }
         });
     }
@@ -341,10 +357,10 @@ async fn alpaca_stream_market_data(
     while *running.read().unwrap() {
         let Some(msg) = ws.next().await else { break };
         match msg? {
-            Message::Text(text) => handle_stream_text(&text, last_data, handler),
+            Message::Text(text) => handle_stream_text(&text, last_data, handler)?,
             Message::Binary(bytes) => {
                 if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                    handle_stream_text(&text, last_data, handler);
+                    handle_stream_text(&text, last_data, handler)?;
                 }
             }
             Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
@@ -362,10 +378,10 @@ fn handle_stream_text(
     text: &str,
     last_data: &Arc<RwLock<HashMap<String, TickerData>>>,
     handler: &Arc<RwLock<Option<Box<dyn DataHandler>>>>,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         warn!("Invalid Alpaca market stream JSON: {}", text);
-        return;
+        return Ok(());
     };
     let events: Vec<serde_json::Value> = match value {
         serde_json::Value::Array(items) => items,
@@ -378,6 +394,7 @@ fn handle_stream_text(
         if matches!(kind, "success" | "subscription" | "error") {
             if kind == "error" {
                 warn!("Alpaca market data stream control event: {}", event);
+                return Err(format!("Alpaca market data stream control error: {}", event).into());
             } else {
                 debug!("Alpaca market data stream control event: {}", event);
             }
@@ -413,6 +430,7 @@ fn handle_stream_text(
             h.handle(&symbol, &data);
         }
     }
+    Ok(())
 }
 
 async fn fetch_snapshot(
