@@ -2,15 +2,19 @@
 pub mod basket;
 
 use chrono::{DateTime, Utc};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::{debug, info, warn};
 
-const DEFAULT_MARKET_DATA_POLL_SECS: u64 = 5;
-const MIN_MARKET_DATA_POLL_SECS: u64 = 1;
+const DEFAULT_MARKET_DATA_POLL_SECS: u64 = 15;
+const MIN_MARKET_DATA_POLL_SECS: u64 = 5;
+const ALPACA_MARKET_DATA_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
+const STREAM_RECONNECT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -84,9 +88,52 @@ impl TickerServer {
 
     pub async fn start(&self) {
         *self.running.write().unwrap() = true;
-        info!("TickerServer started (mock={})", self.mock_mode);
+        info!(
+            mock = self.mock_mode,
+            poll_interval_secs = self.poll_interval.as_secs(),
+            stream_enabled = market_data_stream_enabled(),
+            "TickerServer started"
+        );
         self.update_market_data().await;
+        if !self.mock_mode && market_data_stream_enabled() {
+            self.spawn_streamer();
+        }
         self.spawn_poller();
+    }
+
+    fn spawn_streamer(&self) {
+        let symbols = self.symbols.clone();
+        let last_data = self.last_data.clone();
+        let handler = self.handler.clone();
+        let running = self.running.clone();
+        let api_key = self.api_key.clone();
+        let api_secret = self.api_secret.clone();
+        tokio::spawn(async move {
+            loop {
+                if !*running.read().unwrap() {
+                    break;
+                }
+                let syms = symbols.read().unwrap().clone();
+                if syms.is_empty() {
+                    tokio::time::sleep(Duration::from_secs(STREAM_RECONNECT_SECS)).await;
+                    continue;
+                }
+                match alpaca_stream_market_data(
+                    &api_key,
+                    &api_secret,
+                    &syms,
+                    &last_data,
+                    &handler,
+                    &running,
+                )
+                .await
+                {
+                    Ok(()) => info!("Alpaca market data stream ended"),
+                    Err(e) => warn!("ALPACA_MARKET_DATA_STREAM_FAILED: {}", e),
+                }
+                tokio::time::sleep(Duration::from_secs(STREAM_RECONNECT_SECS)).await;
+            }
+        });
     }
 
     fn spawn_poller(&self) {
@@ -253,6 +300,121 @@ fn market_data_poll_interval() -> Duration {
     Duration::from_secs(secs)
 }
 
+fn market_data_stream_enabled() -> bool {
+    std::env::var("GO_TRADER_MARKET_DATA_STREAM_ENABLED")
+        .map(|raw| {
+            !matches!(
+                raw.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+async fn alpaca_stream_market_data(
+    api_key: &str,
+    api_secret: &str,
+    symbols: &[String],
+    last_data: &Arc<RwLock<HashMap<String, TickerData>>>,
+    handler: &Arc<RwLock<Option<Box<dyn DataHandler>>>>,
+    running: &Arc<RwLock<bool>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!(
+        url = ALPACA_MARKET_DATA_STREAM_URL,
+        symbols = symbols.len(),
+        "Connecting Alpaca market data stream"
+    );
+    let (mut ws, _) = connect_async(ALPACA_MARKET_DATA_STREAM_URL).await?;
+    ws.send(Message::Text(
+        serde_json::json!({"action":"auth","key":api_key,"secret":api_secret})
+            .to_string()
+            .into(),
+    ))
+    .await?;
+    ws.send(Message::Text(
+        serde_json::json!({"action":"subscribe","trades":symbols,"quotes":symbols,"bars":symbols})
+            .to_string()
+            .into(),
+    ))
+    .await?;
+
+    while *running.read().unwrap() {
+        let Some(msg) = ws.next().await else { break };
+        match msg? {
+            Message::Text(text) => handle_stream_text(&text, last_data, handler),
+            Message::Binary(bytes) => {
+                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                    handle_stream_text(&text, last_data, handler);
+                }
+            }
+            Message::Ping(payload) => ws.send(Message::Pong(payload)).await?,
+            Message::Close(frame) => {
+                warn!("Alpaca market data stream closed: {:?}", frame);
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn handle_stream_text(
+    text: &str,
+    last_data: &Arc<RwLock<HashMap<String, TickerData>>>,
+    handler: &Arc<RwLock<Option<Box<dyn DataHandler>>>>,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        warn!("Invalid Alpaca market stream JSON: {}", text);
+        return;
+    };
+    let events: Vec<serde_json::Value> = match value {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    };
+    for event in events {
+        let Some(kind) = event.get("T").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if matches!(kind, "success" | "subscription" | "error") {
+            if kind == "error" {
+                warn!("Alpaca market data stream control event: {}", event);
+            } else {
+                debug!("Alpaca market data stream control event: {}", event);
+            }
+            continue;
+        }
+        let Some(symbol) = event.get("S").and_then(|v| v.as_str()).map(str::to_string) else {
+            continue;
+        };
+        let mut data = last_data
+            .read()
+            .unwrap()
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_else(|| TickerData {
+                symbol: symbol.clone(),
+                trade: None,
+                quote: None,
+                bar: None,
+                last_updated: Utc::now(),
+            });
+        match kind {
+            "t" => data.trade = parse_stream_trade(&event),
+            "q" => data.quote = parse_stream_quote(&event),
+            "b" => data.bar = parse_stream_bar(&event),
+            _ => continue,
+        }
+        data.last_updated = Utc::now();
+        last_data
+            .write()
+            .unwrap()
+            .insert(symbol.clone(), data.clone());
+        if let Some(ref h) = *handler.read().unwrap() {
+            h.handle(&symbol, &data);
+        }
+    }
+}
+
 async fn fetch_snapshot(
     http: &reqwest::Client,
     api_key: &str,
@@ -280,6 +442,40 @@ async fn fetch_snapshot(
         .or_else(|_| parse_snapshot_bar(&snapshot, "minuteBar"))
         .ok();
     Ok((trade, quote, bar))
+}
+
+fn parse_stream_trade(event: &serde_json::Value) -> Option<Trade> {
+    Some(Trade {
+        price: event.get("p")?.as_f64()?,
+        size: u32::try_from(event.get("s")?.as_u64()?).ok()?,
+        timestamp: event.get("t")?.as_str()?.to_string(),
+        exchange: event
+            .get("x")
+            .and_then(|v| v.as_str())
+            .unwrap_or("IEX")
+            .to_string(),
+    })
+}
+
+fn parse_stream_quote(event: &serde_json::Value) -> Option<Quote> {
+    Some(Quote {
+        bid_price: event.get("bp")?.as_f64()?,
+        bid_size: u32::try_from(event.get("bs")?.as_u64()?).ok()?,
+        ask_price: event.get("ap")?.as_f64()?,
+        ask_size: u32::try_from(event.get("as")?.as_u64()?).ok()?,
+        timestamp: event.get("t")?.as_str()?.to_string(),
+    })
+}
+
+fn parse_stream_bar(event: &serde_json::Value) -> Option<Bar> {
+    Some(Bar {
+        close: event.get("c")?.as_f64()?,
+        high: event.get("h")?.as_f64()?,
+        low: event.get("l")?.as_f64()?,
+        open: event.get("o")?.as_f64()?,
+        volume: event.get("v")?.as_u64()?,
+        timestamp: event.get("t")?.as_str()?.to_string(),
+    })
 }
 
 fn parse_snapshot_trade(

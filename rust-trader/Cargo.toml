@@ -30,6 +30,8 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
 
 # Decimal arithmetic
 rust_decimal = "1"
@@ -94,5 +96,5 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 dotenvy.workspace = true
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
-futures-util = "0.3"
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

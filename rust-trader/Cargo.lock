@@ -678,12 +678,14 @@ name = "go-trader-ticker"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures-util",
  "go-trader-types",
  "reqwest",
  "rust_decimal",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
 ]
 

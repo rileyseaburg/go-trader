@@ -46,7 +46,9 @@ spec:
             - name: GO_TRADER_AUTO_TRADE_INTERVAL_SECS
               value: "15"
             - name: GO_TRADER_MARKET_DATA_INTERVAL_SECS
-              value: "1"
+              value: "15"
+            - name: GO_TRADER_MARKET_DATA_STREAM_ENABLED
+              value: "true"
             - name: GO_TRADER_EVENT_DRIVEN_AUTO_TRADE
               value: "true"
             - name: GO_TRADER_EVENT_EVAL_INTERVAL_SECS

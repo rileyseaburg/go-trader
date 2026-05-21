@@ -13,3 +13,5 @@ reqwest.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 rust_decimal.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
