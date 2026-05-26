@@ -93,8 +93,9 @@ impl TickerServer {
         *self.running.write().unwrap() = true;
         info!(
             mock = self.mock_mode,
-            poll_interval_secs = self.poll_interval.as_secs(),
+            poll_interval_ms = self.poll_interval.as_millis(),
             stream_enabled = market_data_stream_enabled(),
+            low_latency_mode = low_latency_market_data_mode(),
             "TickerServer started"
         );
         self.update_market_data().await;
@@ -342,12 +343,39 @@ fn stream_data_is_fresh(
 }
 
 fn market_data_poll_interval() -> Duration {
+    if let Some(ms) = std::env::var("GO_TRADER_MARKET_DATA_INTERVAL_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+    {
+        let min_ms = if low_latency_market_data_mode() {
+            100
+        } else {
+            MIN_MARKET_DATA_POLL_SECS * 1000
+        };
+        return Duration::from_millis(ms.max(min_ms));
+    }
+
     let secs = std::env::var("GO_TRADER_MARKET_DATA_INTERVAL_SECS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MARKET_DATA_POLL_SECS)
-        .max(MIN_MARKET_DATA_POLL_SECS);
-    Duration::from_secs(secs)
+        .unwrap_or(DEFAULT_MARKET_DATA_POLL_SECS);
+    let min_secs = if low_latency_market_data_mode() {
+        1
+    } else {
+        MIN_MARKET_DATA_POLL_SECS
+    };
+    Duration::from_secs(secs.max(min_secs))
+}
+
+fn low_latency_market_data_mode() -> bool {
+    std::env::var("GO_TRADER_LOW_LATENCY_MODE")
+        .map(|raw| {
+            !matches!(
+                raw.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn market_data_stream_enabled() -> bool {

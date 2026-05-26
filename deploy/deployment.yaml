@@ -40,13 +40,17 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--port", "8080", "--auto-trade", "--symbols", "AAPL,MSFT,TSLA,CBRS", "--db-path", "/app/data/go-trader.sqlite3"]
           env:
-            # Software low-latency mode: tighter scan/feed cadence while staying
-            # inside Alpaca API/broker constraints. This is still paper/API
-            # trading, not FPGA/direct-market-access execution.
+            # Software low-latency mode: stream-first event evaluation with
+            # millisecond gates while staying inside Alpaca API/broker constraints.
+            # This is still paper/API trading, not FPGA/direct-market-access execution.
+            - name: GO_TRADER_LOW_LATENCY_MODE
+              value: "true"
             - name: GO_TRADER_AUTO_TRADE_INTERVAL_SECS
               value: "15"
             - name: GO_TRADER_MARKET_DATA_INTERVAL_SECS
-              value: "15"
+              value: "1"
+            - name: GO_TRADER_MARKET_DATA_INTERVAL_MS
+              value: "250"
             - name: GO_TRADER_MARKET_DATA_STREAM_ENABLED
               value: "true"
             - name: GO_TRADER_SEED_BAR_COUNT
@@ -58,9 +62,13 @@ spec:
             - name: GO_TRADER_EVENT_DRIVEN_AUTO_TRADE
               value: "true"
             - name: GO_TRADER_EVENT_EVAL_INTERVAL_SECS
-              value: "5"
+              value: "1"
+            - name: GO_TRADER_EVENT_EVAL_INTERVAL_MS
+              value: "250"
             - name: GO_TRADER_EVENT_ORDER_COOLDOWN_SECS
-              value: "60"
+              value: "15"
+            - name: GO_TRADER_EVENT_ORDER_COOLDOWN_MS
+              value: "1000"
           ports:
             - name: http
               containerPort: 8080

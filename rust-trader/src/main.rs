@@ -88,6 +88,9 @@ struct Args {
     /// Minimum seconds between event-driven signal evaluations per symbol.
     #[arg(long, env = "GO_TRADER_EVENT_EVAL_INTERVAL_SECS", default_value_t = 5)]
     event_eval_interval_secs: u64,
+    /// Optional millisecond override for low-latency/event-driven signal evaluation.
+    #[arg(long, env = "GO_TRADER_EVENT_EVAL_INTERVAL_MS")]
+    event_eval_interval_ms: Option<u64>,
     /// Minimum seconds between event-driven order attempts per symbol.
     #[arg(
         long,
@@ -95,6 +98,13 @@ struct Args {
         default_value_t = 60
     )]
     event_order_cooldown_secs: u64,
+    /// Optional millisecond override for low-latency/event-driven order attempts.
+    #[arg(long, env = "GO_TRADER_EVENT_ORDER_COOLDOWN_MS")]
+    event_order_cooldown_ms: Option<u64>,
+    /// Software low-latency mode: stream-first, millisecond event gating, and evidence logs.
+    /// This is still Alpaca API/broker paper/live trading, not FPGA/direct-market-access execution.
+    #[arg(long, env = "GO_TRADER_LOW_LATENCY_MODE", default_value_t = false)]
+    low_latency_mode: bool,
     /// Run historical backtest instead of live trading.
     #[arg(long, default_value_t = false)]
     backtest: bool,
@@ -257,18 +267,28 @@ async fn main() {
     let notif_clone = notification_mgr.clone();
     let pt_clone = price_tracker.clone();
     let buf_clone = bar_buffer.clone();
-    let event_evaluator = if args.auto_trade && args.event_driven_auto_trade {
-        Some(EventDrivenEvaluator::new(
-            trading_algo.clone(),
-            audit.clone(),
-            bar_buffer.clone(),
-            args.dry_run,
-            Duration::from_secs(args.event_eval_interval_secs.max(1)),
-            Duration::from_secs(args.event_order_cooldown_secs.max(15)),
-        ))
-    } else {
-        None
-    };
+    let event_eval_interval = args
+        .event_eval_interval_ms
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_secs(args.event_eval_interval_secs.max(1)));
+    let event_order_cooldown = args
+        .event_order_cooldown_ms
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_secs(args.event_order_cooldown_secs.max(15)));
+    let event_evaluator =
+        if args.auto_trade && (args.event_driven_auto_trade || args.low_latency_mode) {
+            Some(EventDrivenEvaluator::new(
+                trading_algo.clone(),
+                audit.clone(),
+                bar_buffer.clone(),
+                args.dry_run,
+                event_eval_interval,
+                event_order_cooldown,
+                args.low_latency_mode,
+            ))
+        } else {
+            None
+        };
     struct Handler {
         algo: Arc<TradingAlgorithm>,
         notif: Arc<NotificationManager>,
@@ -481,6 +501,7 @@ struct EventDrivenEvaluator {
     dry_run: bool,
     eval_interval: Duration,
     order_cooldown: Duration,
+    low_latency_mode: bool,
     last_eval: Arc<RwLock<std::collections::HashMap<String, Instant>>>,
     last_order_attempt: Arc<RwLock<std::collections::HashMap<String, Instant>>>,
 }
@@ -493,12 +514,14 @@ impl EventDrivenEvaluator {
         dry_run: bool,
         eval_interval: Duration,
         order_cooldown: Duration,
+        low_latency_mode: bool,
     ) -> Self {
         info!(
-            eval_interval_secs = eval_interval.as_secs(),
-            order_cooldown_secs = order_cooldown.as_secs(),
+            eval_interval_ms = eval_interval.as_millis(),
+            order_cooldown_ms = order_cooldown.as_millis(),
             dry_run,
-            "Event-driven auto-trade evaluation enabled"
+            low_latency_mode,
+            "LOW_LATENCY_EVENT_ENGINE_ENABLED: stream events trigger immediate per-symbol evaluation; broker/API latency still applies"
         );
         Self {
             trading_algo,
@@ -507,6 +530,7 @@ impl EventDrivenEvaluator {
             dry_run,
             eval_interval,
             order_cooldown,
+            low_latency_mode,
             last_eval: Arc::new(RwLock::new(std::collections::HashMap::new())),
             last_order_attempt: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
@@ -529,6 +553,12 @@ impl EventDrivenEvaluator {
         let symbol = symbol.to_string();
         tokio::spawn(async move {
             let started = Instant::now();
+            if evaluator.low_latency_mode {
+                info!(
+                    symbol,
+                    "LOW_LATENCY_EVENT_RECEIVED: dispatching immediate signal path"
+                );
+            }
             let bars = evaluator.bar_buffer.get_bars(&symbol);
             if bars.len() >= 20 {
                 let set = go_trader_indicators::compute_all(&bars);
@@ -548,7 +578,8 @@ impl EventDrivenEvaluator {
                 Ok(()) => info!(
                     symbol,
                     latency_ms = started.elapsed().as_millis(),
-                    "Event-driven auto-trade evaluation completed"
+                    low_latency_mode = evaluator.low_latency_mode,
+                    "LOW_LATENCY_EVENT_EVALUATION_COMPLETED"
                 ),
                 Err(e) => warn!(symbol, "EVENT_DRIVEN_AUTO_TRADE_EVALUATION_FAILED: {}", e),
             }
@@ -644,7 +675,7 @@ async fn evaluate_symbol_for_auto_trade_with_source(
                 info!(
                     symbol,
                     action = signal.signal,
-                    cooldown_secs = cooldown.as_secs(),
+                    cooldown_ms = cooldown.as_millis(),
                     "Event-driven actionable signal suppressed by order cooldown"
                 );
                 return Ok(());
