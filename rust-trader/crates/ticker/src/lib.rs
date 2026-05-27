@@ -18,6 +18,7 @@ const STREAM_RECONNECT_INITIAL_SECS: u64 = 5;
 const STREAM_RECONNECT_MAX_SECS: u64 = 300;
 const STREAM_CONNECTION_LIMIT_BACKOFF_SECS: u64 = 1800;
 const STREAM_FRESH_SKIP_MULTIPLIER: u32 = 2;
+const DEFAULT_MARKET_DATA_STREAM_SYMBOL_LIMIT: usize = 30;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -118,7 +119,9 @@ impl TickerServer {
                 if !*running.read().unwrap() {
                     break;
                 }
-                let syms = symbols.read().unwrap().clone();
+                let all_syms = symbols.read().unwrap().clone();
+                let stream_limit = market_data_stream_symbol_limit();
+                let syms: Vec<String> = all_syms.into_iter().take(stream_limit).collect();
                 if syms.is_empty() {
                     tokio::time::sleep(reconnect_delay).await;
                     continue;
@@ -396,6 +399,14 @@ fn market_data_stream_connection_limit_backoff() -> Duration {
         .unwrap_or(STREAM_CONNECTION_LIMIT_BACKOFF_SECS)
         .max(STREAM_RECONNECT_MAX_SECS);
     Duration::from_secs(secs)
+}
+
+fn market_data_stream_symbol_limit() -> usize {
+    std::env::var("GO_TRADER_MARKET_DATA_STREAM_SYMBOL_LIMIT")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MARKET_DATA_STREAM_SYMBOL_LIMIT)
+        .max(1)
 }
 
 fn is_stream_connection_limit_error(error: &str) -> bool {
