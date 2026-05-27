@@ -135,7 +135,11 @@ impl Strategy for MeanReversionStrategy {
         } else {
             StrategyVote::neutral(
                 self.name(),
-                format!("no extreme levels: RSI={:.1}, BB pos={:+.0}%", rsi, bb_pos * 100.0),
+                format!(
+                    "no extreme levels: RSI={:.1}, BB pos={:+.0}%",
+                    rsi,
+                    bb_pos * 100.0
+                ),
             )
         }
     }
@@ -169,7 +173,11 @@ mod tests {
         let mut ctx = make_ctx(&ind);
         ctx.price = 154.5; // near upper band
         let vote = strategy.evaluate(&ctx);
-        assert!(vote.direction < 0.0, "expected sell, got direction={}", vote.direction);
+        assert!(
+            vote.direction < 0.0,
+            "expected sell, got direction={}",
+            vote.direction
+        );
     }
 
     #[test]
@@ -183,7 +191,11 @@ mod tests {
         let mut ctx = make_ctx(&ind);
         ctx.price = 145.5; // near lower band
         let vote = strategy.evaluate(&ctx);
-        assert!(vote.direction > 0.0, "expected buy, got direction={}", vote.direction);
+        assert!(
+            vote.direction > 0.0,
+            "expected buy, got direction={}",
+            vote.direction
+        );
     }
 
     #[test]

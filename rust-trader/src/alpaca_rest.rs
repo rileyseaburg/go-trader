@@ -195,7 +195,7 @@ impl AlpacaRestClient {
     pub async fn get_bars_raw(
         &self,
         symbol: &str,
-        timeframe: &str,  // e.g. "1Min", "5Min", "15Min", "1H", "1D"
+        timeframe: &str, // e.g. "1Min", "5Min", "15Min", "1H", "1D"
         limit: u32,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
         // Look back 7 calendar days to ensure we capture bars even on
@@ -206,12 +206,7 @@ impl AlpacaRestClient {
             "{}/v2/stocks/{}/bars?timeframe={}&limit={}&adjustment=raw&feed=iex&sort=asc&start={}",
             self.data_url, symbol, timeframe, limit, start_str
         );
-        let resp = self
-            .http
-            .get(&url)
-            .headers(self.auth())
-            .send()
-            .await?;
+        let resp = self.http.get(&url).headers(self.auth()).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -233,10 +228,7 @@ impl AlpacaRestClient {
             .get("bars")
             .cloned()
             .unwrap_or(serde_json::Value::Array(vec![]));
-        let arr = bars_val
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let arr = bars_val.as_array().cloned().unwrap_or_default();
 
         let bars: Vec<Bar> = arr
             .iter()
@@ -253,12 +245,7 @@ impl AlpacaRestClient {
             })
             .collect();
 
-        tracing::debug!(
-            "Fetched {} bars for {} ({})",
-            bars.len(),
-            symbol,
-            timeframe
-        );
+        tracing::debug!("Fetched {} bars for {} ({})", bars.len(), symbol, timeframe);
         Ok(bars)
     }
 
@@ -268,16 +255,8 @@ impl AlpacaRestClient {
         &self,
         symbol: &str,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!(
-            "{}/v2/stocks/{}/quotes/latest",
-            self.data_url, symbol
-        );
-        let resp = self
-            .http
-            .get(&url)
-            .headers(self.auth())
-            .send()
-            .await?;
+        let url = format!("{}/v2/stocks/{}/quotes/latest", self.data_url, symbol);
+        let resp = self.http.get(&url).headers(self.auth()).send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {

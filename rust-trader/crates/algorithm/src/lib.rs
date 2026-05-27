@@ -6,5 +6,8 @@ mod types;
 pub use algorithm::TradingAlgorithm;
 pub use local_signal::RuleBasedSignalEngine;
 pub use model_signal::ModelSignalClient;
-pub use strategy::{Arbitrator, TrendFollowingStrategy, MeanReversionStrategy, MomentumBreakoutStrategy, StrategyVote, StrategyContext, Strategy};
+pub use strategy::{
+    Arbitrator, MeanReversionStrategy, MicroScalperStrategy, MomentumBreakoutStrategy, Strategy,
+    StrategyContext, StrategyVote, TapeVelocityStrategy, TrendFollowingStrategy,
+};
 pub use types::*;

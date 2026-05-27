@@ -55,7 +55,10 @@ impl Strategy for TrendFollowingStrategy {
         if adx < self.adx_threshold {
             return StrategyVote::neutral(
                 self.name(),
-                format!("ADX {:.1} below threshold {:.1}; no actionable trend", adx, self.adx_threshold),
+                format!(
+                    "ADX {:.1} below threshold {:.1}; no actionable trend",
+                    adx, self.adx_threshold
+                ),
             );
         }
 
@@ -144,9 +147,7 @@ mod tests {
 
     #[test]
     fn low_adx_produces_neutral() {
-        let ind = IndicatorSetBuilder::new()
-            .with_adx(15.0)
-            .build();
+        let ind = IndicatorSetBuilder::new().with_adx(15.0).build();
         let strategy = TrendFollowingStrategy::default();
         let vote = strategy.evaluate(&make_ctx(&ind));
         assert_eq!(vote.direction, 0.0);
@@ -163,7 +164,11 @@ mod tests {
             .build();
         let strategy = TrendFollowingStrategy::default();
         let vote = strategy.evaluate(&make_ctx(&ind));
-        assert!(vote.direction > 0.0, "expected positive direction, got {}", vote.direction);
+        assert!(
+            vote.direction > 0.0,
+            "expected positive direction, got {}",
+            vote.direction
+        );
         assert!(vote.confidence > 0.5);
     }
 
@@ -193,6 +198,10 @@ mod tests {
         ctx.regime_multiplier = 0.5;
         let vote = strategy.evaluate(&ctx);
         assert!(vote.direction > 0.0);
-        assert!(vote.confidence < 0.6, "confidence should be dampened: got {}", vote.confidence);
+        assert!(
+            vote.confidence < 0.6,
+            "confidence should be dampened: got {}",
+            vote.confidence
+        );
     }
 }

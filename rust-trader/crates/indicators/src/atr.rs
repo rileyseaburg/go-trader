@@ -57,8 +57,10 @@ mod tests {
 
     #[test]
     fn atr_with_range() {
-        let closes = vec![44.0, 44.15, 44.09, 43.62, 44.35, 44.84, 45.10, 45.38,
-                          44.96, 45.28, 45.43, 45.56, 45.44, 45.67, 45.80, 45.19];
+        let closes = vec![
+            44.0, 44.15, 44.09, 43.62, 44.35, 44.84, 45.10, 45.38, 44.96, 45.28, 45.43, 45.56,
+            45.44, 45.67, 45.80, 45.19,
+        ];
         let highs: Vec<f64> = closes.iter().map(|c| c + 0.5).collect();
         let lows: Vec<f64> = closes.iter().map(|c| c - 0.3).collect();
         let r = atr(&highs, &lows, &closes, 14);

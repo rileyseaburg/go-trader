@@ -1,14 +1,14 @@
 //! Composite indicator computation — compute the full `IndicatorSet` from bars.
 
-use crate::types::*;
-use crate::moving_average::{sma, ema};
-use crate::rsi::rsi;
-use crate::macd::macd;
-use crate::bollinger::bollinger_bands;
-use crate::atr::atr;
-use crate::vwap::vwap;
 use crate::adx::adx;
+use crate::atr::atr;
+use crate::bollinger::bollinger_bands;
+use crate::macd::macd;
+use crate::moving_average::{ema, sma};
+use crate::rsi::rsi;
 use crate::stochastic::stochastic;
+use crate::types::*;
+use crate::vwap::vwap;
 
 /// Compute the full indicator set from a bar series.
 ///

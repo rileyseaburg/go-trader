@@ -804,7 +804,12 @@ fn env_u64(name: &str, default: u64) -> u64 {
 }
 
 fn is_actionable_signal(signal: &TradeSignal) -> bool {
-    matches!(signal.signal.as_str(), "buy" | "sell") && signal.confidence.unwrap_or(0.0) >= 0.65
+    let min_confidence = std::env::var("GO_TRADER_AUTO_TRADE_MIN_CONFIDENCE")
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .unwrap_or(0.50);
+    matches!(signal.signal.as_str(), "buy" | "sell")
+        && signal.confidence.unwrap_or(0.0) >= min_confidence
 }
 
 async fn sync_portfolio_from_alpaca(

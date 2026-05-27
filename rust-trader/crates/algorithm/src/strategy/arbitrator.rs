@@ -11,9 +11,9 @@ use serde_json::json;
 use super::{Strategy, StrategyContext, StrategyVote};
 use crate::types::{PortfolioData, RiskParameters};
 
-const BUY_THRESHOLD: f64 = 0.15;
-const SELL_THRESHOLD: f64 = -0.15;
-const MIN_CONFIDENCE_FOR_ACTION: f64 = 0.55;
+const BUY_THRESHOLD: f64 = 0.10;
+const SELL_THRESHOLD: f64 = -0.10;
+const MIN_CONFIDENCE_FOR_ACTION: f64 = 0.50;
 
 /// Combines weighted votes from multiple strategies into a final `TradeSignal`.
 pub struct Arbitrator {
@@ -28,9 +28,14 @@ impl Default for Arbitrator {
 
 impl Arbitrator {
     pub fn new_default() -> Self {
-        use super::{MeanReversionStrategy, MomentumBreakoutStrategy, TrendFollowingStrategy};
+        use super::{
+            MeanReversionStrategy, MicroScalperStrategy, MomentumBreakoutStrategy,
+            TapeVelocityStrategy, TrendFollowingStrategy,
+        };
         Self {
             strategies: vec![
+                Box::new(TapeVelocityStrategy),
+                Box::new(MicroScalperStrategy::default()),
                 Box::new(TrendFollowingStrategy::default()),
                 Box::new(MeanReversionStrategy::default()),
                 Box::new(MomentumBreakoutStrategy::default()),
@@ -117,7 +122,14 @@ impl Arbitrator {
 
         let vote_summary: Vec<String> = votes
             .iter()
-            .map(|v| format!("{}: {} ({:.0}%)", v.strategy_name, v.reason, v.confidence * 100.0))
+            .map(|v| {
+                format!(
+                    "{}: {} ({:.0}%)",
+                    v.strategy_name,
+                    v.reason,
+                    v.confidence * 100.0
+                )
+            })
             .collect();
 
         let (pre_risk_signal, final_confidence, reason_prefix) =
@@ -125,19 +137,31 @@ impl Arbitrator {
                 (
                     SIGNAL_BUY,
                     confidence,
-                    format!("MULTI-STRATEGY BUY (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
+                    format!(
+                        "MULTI-STRATEGY BUY (net={:+.02}, conf={:.0}%): ",
+                        adjusted_net,
+                        confidence * 100.0
+                    ),
                 )
             } else if adjusted_net < SELL_THRESHOLD && confidence >= MIN_CONFIDENCE_FOR_ACTION {
                 (
                     SIGNAL_SELL,
                     confidence,
-                    format!("MULTI-STRATEGY SELL (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
+                    format!(
+                        "MULTI-STRATEGY SELL (net={:+.02}, conf={:.0}%): ",
+                        adjusted_net,
+                        confidence * 100.0
+                    ),
                 )
             } else {
                 (
                     SIGNAL_HOLD,
                     confidence,
-                    format!("MULTI-STRATEGY HOLD (net={:+.02}, conf={:.0}%): ", adjusted_net, confidence * 100.0),
+                    format!(
+                        "MULTI-STRATEGY HOLD (net={:+.02}, conf={:.0}%): ",
+                        adjusted_net,
+                        confidence * 100.0
+                    ),
                 )
             };
 
@@ -154,26 +178,44 @@ impl Arbitrator {
             .get("blocks_order")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let signal = if blocks_order { SIGNAL_HOLD } else { pre_risk_signal };
+        let signal = if blocks_order {
+            SIGNAL_HOLD
+        } else {
+            pre_risk_signal
+        };
 
-        let regime_label = if regime_name.is_empty() { "UNSET" } else { regime_name };
+        let regime_label = if regime_name.is_empty() {
+            "UNSET"
+        } else {
+            regime_name
+        };
         let reasoning = format!(
             "{}regime={} ×{:.2}; votes: [{}]",
-            reason_prefix, regime_label, regime_multiplier,
+            reason_prefix,
+            regime_label,
+            regime_multiplier,
             vote_summary.join("; "),
         );
 
-        let vote_audit: Vec<_> = votes.iter().map(|v| {
-            let weight = self.strategies.iter().find(|s| s.name() == v.strategy_name).map(|s| s.weight()).unwrap_or(1.0);
-            json!({
-                "strategy": v.strategy_name,
-                "direction": v.direction,
-                "confidence": v.confidence,
-                "weight": weight,
-                "weighted_score": v.direction * v.confidence * weight,
-                "reason": v.reason,
+        let vote_audit: Vec<_> = votes
+            .iter()
+            .map(|v| {
+                let weight = self
+                    .strategies
+                    .iter()
+                    .find(|s| s.name() == v.strategy_name)
+                    .map(|s| s.weight())
+                    .unwrap_or(1.0);
+                json!({
+                    "strategy": v.strategy_name,
+                    "direction": v.direction,
+                    "confidence": v.confidence,
+                    "weight": weight,
+                    "weighted_score": v.direction * v.confidence * weight,
+                    "reason": v.reason,
+                })
             })
-        }).collect();
+            .collect();
 
         TradeSignal {
             symbol: symbol.into(),
@@ -254,8 +296,16 @@ fn risk_gate_json(
     min_confidence: f64,
 ) -> serde_json::Value {
     let equity = portfolio.total_value;
-    let current_position_value = portfolio.positions.get(symbol).map(|p| p.market_val.abs()).unwrap_or(0.0);
-    let current_position_pct = if equity > f64::EPSILON { current_position_value / equity * 100.0 } else { 0.0 };
+    let current_position_value = portfolio
+        .positions
+        .get(symbol)
+        .map(|p| p.market_val.abs())
+        .unwrap_or(0.0);
+    let current_position_pct = if equity > f64::EPSILON {
+        current_position_value / equity * 100.0
+    } else {
+        0.0
+    };
     let mut violations = Vec::new();
     if current_position_pct > risk.max_position_size_percent {
         violations.push(format!(
@@ -263,18 +313,32 @@ fn risk_gate_json(
             symbol, current_position_pct, risk.max_position_size_percent
         ));
     }
-    if portfolio.positions.len() >= risk.max_open_positions && signal == SIGNAL_BUY && current_position_value <= f64::EPSILON {
-        violations.push(format!("max_open_positions {} reached", risk.max_open_positions));
+    if portfolio.positions.len() >= risk.max_open_positions
+        && signal == SIGNAL_BUY
+        && current_position_value <= f64::EPSILON
+    {
+        violations.push(format!(
+            "max_open_positions {} reached",
+            risk.max_open_positions
+        ));
     }
     if confidence < min_confidence && signal != SIGNAL_HOLD {
-        violations.push(format!("confidence {:.0}% below action minimum {:.0}%", confidence * 100.0, min_confidence * 100.0));
+        violations.push(format!(
+            "confidence {:.0}% below action minimum {:.0}%",
+            confidence * 100.0,
+            min_confidence * 100.0
+        ));
     }
     let buy_below_threshold = signal == SIGNAL_BUY && adjusted_net <= BUY_THRESHOLD;
     let sell_below_threshold = signal == SIGNAL_SELL && adjusted_net >= SELL_THRESHOLD;
     if buy_below_threshold || sell_below_threshold {
-        violations.push(format!("adjusted net {:+.2} below directional threshold", adjusted_net));
+        violations.push(format!(
+            "adjusted net {:+.2} below directional threshold",
+            adjusted_net
+        ));
     }
-    let blocks_order = signal == SIGNAL_BUY && current_position_pct > risk.max_position_size_percent;
+    let blocks_order =
+        signal == SIGNAL_BUY && current_position_pct > risk.max_position_size_percent;
     json!({
         "passed": violations.is_empty() || !blocks_order,
         "blocks_order": blocks_order,
@@ -285,11 +349,21 @@ fn risk_gate_json(
     })
 }
 
-fn order_sizing_json(price: f64, portfolio: &PortfolioData, risk: &RiskParameters, regime_multiplier: f64, confidence: f64) -> serde_json::Value {
+fn order_sizing_json(
+    price: f64,
+    portfolio: &PortfolioData,
+    risk: &RiskParameters,
+    regime_multiplier: f64,
+    confidence: f64,
+) -> serde_json::Value {
     let equity = portfolio.total_value;
     let max_position_value = equity * (risk.max_position_size_percent / 100.0);
     let regime_adjusted_value = max_position_value * regime_multiplier * confidence;
-    let estimated_qty = if price > f64::EPSILON { (regime_adjusted_value / price).floor() } else { 0.0 };
+    let estimated_qty = if price > f64::EPSILON {
+        (regime_adjusted_value / price).floor()
+    } else {
+        0.0
+    };
     json!({
         "equity": equity,
         "max_position_value": max_position_value,
@@ -369,7 +443,11 @@ mod tests {
             0.85,
             &ind,
         );
-        assert_eq!(signal.signal, SIGNAL_HOLD, "reasoning: {}", signal.reasoning);
+        assert_eq!(
+            signal.signal, SIGNAL_HOLD,
+            "reasoning: {}",
+            signal.reasoning
+        );
         assert_eq!(signal.confidence, Some(0.0));
     }
 
@@ -397,7 +475,11 @@ mod tests {
             0.9,
             &ind,
         );
-        assert_eq!(signal.signal, SIGNAL_SELL, "reasoning: {}", signal.reasoning);
+        assert_eq!(
+            signal.signal, SIGNAL_SELL,
+            "reasoning: {}",
+            signal.reasoning
+        );
     }
 
     #[test]
@@ -427,6 +509,9 @@ mod tests {
         );
         // Even with bullish indicators, defensive regime dampens confidence
         // The signal direction is still based on indicator consensus
-        assert!(signal.confidence.unwrap() < 0.8, "confidence should be dampened");
+        assert!(
+            signal.confidence.unwrap() < 0.8,
+            "confidence should be dampened"
+        );
     }
 }

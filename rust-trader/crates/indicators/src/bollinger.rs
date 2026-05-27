@@ -2,25 +2,20 @@
 //!
 //! Middle = SMA(period), Upper/Lower = middle ± multiplier × σ
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct BollingerResult {
     pub upper: f64,
     pub middle: f64,
     pub lower: f64,
-    pub bandwidth: f64,   // (upper - lower) / middle
-    pub percent_b: f64,   // (close - lower) / (upper - lower)
+    pub bandwidth: f64, // (upper - lower) / middle
+    pub percent_b: f64, // (close - lower) / (upper - lower)
 }
 
 /// Compute Bollinger Bands from close prices.
 ///
 /// Standard: SMA(20) ± 2σ.
 /// Returns `None` if fewer than `period` values.
-pub fn bollinger_bands(
-    closes: &[f64],
-    period: usize,
-    multiplier: f64,
-) -> Option<BollingerResult> {
+pub fn bollinger_bands(closes: &[f64], period: usize, multiplier: f64) -> Option<BollingerResult> {
     if closes.len() < period || period == 0 {
         return None;
     }
@@ -29,8 +24,7 @@ pub fn bollinger_bands(
     let middle = slice.iter().sum::<f64>() / period as f64;
 
     // Population standard deviation
-    let variance: f64 =
-        slice.iter().map(|v| (v - middle).powi(2)).sum::<f64>() / period as f64;
+    let variance: f64 = slice.iter().map(|v| (v - middle).powi(2)).sum::<f64>() / period as f64;
     let stddev = variance.sqrt();
 
     let upper = middle + multiplier * stddev;

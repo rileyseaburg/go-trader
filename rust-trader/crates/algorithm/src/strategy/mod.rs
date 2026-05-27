@@ -4,15 +4,19 @@
 //! produces a `StrategyVote`, and an `Arbitrator` combines votes into
 //! a final trading signal.
 
-mod trend_following;
-mod mean_reversion;
-mod momentum_breakout;
 mod arbitrator;
+mod mean_reversion;
+mod micro_scalper;
+mod momentum_breakout;
+mod tape_velocity;
+mod trend_following;
 
-pub use trend_following::TrendFollowingStrategy;
-pub use mean_reversion::MeanReversionStrategy;
-pub use momentum_breakout::MomentumBreakoutStrategy;
 pub use arbitrator::Arbitrator;
+pub use mean_reversion::MeanReversionStrategy;
+pub use micro_scalper::MicroScalperStrategy;
+pub use momentum_breakout::MomentumBreakoutStrategy;
+pub use tape_velocity::TapeVelocityStrategy;
+pub use trend_following::TrendFollowingStrategy;
 
 use go_trader_indicators::IndicatorSet;
 

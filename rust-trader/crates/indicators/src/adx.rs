@@ -111,7 +111,10 @@ mod tests {
         let r = adx(&highs, &lows, &closes, 14);
         assert!(r.is_some());
         let result = r.unwrap();
-        assert!(result.plus_di > result.minus_di, "uptrend should have +DI > -DI");
+        assert!(
+            result.plus_di > result.minus_di,
+            "uptrend should have +DI > -DI"
+        );
     }
 
     #[test]

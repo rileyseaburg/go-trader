@@ -2,9 +2,9 @@
 
 use crate::report::*;
 use chrono::Utc;
-use go_trader_indicators::{Bar, compute_all};
 use go_trader_algorithm::{Arbitrator, PortfolioData, PositionData, RiskParameters};
-use go_trader_types::{MarketData, TradeSignal, SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD};
+use go_trader_indicators::{compute_all, Bar};
+use go_trader_types::{MarketData, TradeSignal, SIGNAL_BUY, SIGNAL_HOLD, SIGNAL_SELL};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,9 @@ impl BacktestEngine {
     }
 
     pub fn run(&mut self, symbol: &str, bars: Vec<Bar>) -> BacktestReport {
-        for bar in &bars { self.process_bar(symbol, bar); }
+        for bar in &bars {
+            self.process_bar(symbol, bar);
+        }
         self.build_report(symbol)
     }
 
@@ -110,8 +112,13 @@ impl BacktestEngine {
         };
         let portfolio = self.build_portfolio(symbol, bar);
         let signal = self.arbitrator.generate_signal(
-            symbol, &md, &portfolio, &self.config.risk,
-            &self.config.regime_name, self.config.regime_multiplier, &indicators,
+            symbol,
+            &md,
+            &portfolio,
+            &self.config.risk,
+            &self.config.regime_name,
+            self.config.regime_multiplier,
+            &indicators,
         );
         if signal.signal != SIGNAL_HOLD {
             let conf = signal.confidence.unwrap_or(0.0);
@@ -129,9 +136,17 @@ impl BacktestEngine {
         for (sym, pos) in &self.positions {
             let pnl_pct = (bar.close - pos.avg_price) / pos.avg_price * 100.0;
             if pnl_pct <= -self.config.risk.stop_loss_percent {
-                to_exit.push((sym.clone(), bar.close, format!("Stop-loss: {:.1}%", pnl_pct)));
+                to_exit.push((
+                    sym.clone(),
+                    bar.close,
+                    format!("Stop-loss: {:.1}%", pnl_pct),
+                ));
             } else if pnl_pct >= self.config.risk.take_profit_percent {
-                to_exit.push((sym.clone(), bar.close, format!("Take-profit: {:.1}%", pnl_pct)));
+                to_exit.push((
+                    sym.clone(),
+                    bar.close,
+                    format!("Take-profit: {:.1}%", pnl_pct),
+                ));
             }
         }
         for (sym, price, reason) in to_exit {
@@ -142,19 +157,36 @@ impl BacktestEngine {
     fn build_portfolio(&self, _symbol: &str, bar: &Bar) -> PortfolioData {
         let mut positions = HashMap::new();
         let total_mv: f64 = self.positions.values().map(|p| p.qty * p.avg_price).sum();
-        let total_pnl: f64 = self.positions.values().map(|p| (bar.close - p.avg_price) * p.qty).sum();
+        let total_pnl: f64 = self
+            .positions
+            .values()
+            .map(|p| (bar.close - p.avg_price) * p.qty)
+            .sum();
         for (sym, pos) in &self.positions {
             let profit = (bar.close - pos.avg_price) * pos.qty;
-            let ret = if pos.avg_price > 0.0 { (bar.close - pos.avg_price) / pos.avg_price * 100.0 } else { 0.0 };
-            positions.insert(sym.clone(), PositionData {
-                symbol: sym.clone(), quantity: pos.qty, avg_price: pos.avg_price,
-                market_val: pos.qty * bar.close, profit, return_pct: ret,
-            });
+            let ret = if pos.avg_price > 0.0 {
+                (bar.close - pos.avg_price) / pos.avg_price * 100.0
+            } else {
+                0.0
+            };
+            positions.insert(
+                sym.clone(),
+                PositionData {
+                    symbol: sym.clone(),
+                    quantity: pos.qty,
+                    avg_price: pos.avg_price,
+                    market_val: pos.qty * bar.close,
+                    profit,
+                    return_pct: ret,
+                },
+            );
         }
         PortfolioData {
             balance: self.cash,
             total_value: self.cash + total_mv + total_pnl,
-            daily_pnl: 0.0, daily_return: 0.0, positions,
+            daily_pnl: 0.0,
+            daily_return: 0.0,
+            positions,
         }
     }
 
@@ -165,21 +197,34 @@ impl BacktestEngine {
 
     fn compute_size(&self, price: f64, equity: f64) -> f64 {
         if let Some(lot) = self.config.fixed_lot_size {
-            if lot * price > self.cash { (self.cash / price).floor() } else { lot }
+            if lot * price > self.cash {
+                (self.cash / price).floor()
+            } else {
+                lot
+            }
         } else if let Some(pct) = self.config.risk_per_trade_pct {
             (equity * pct / 100.0 / price).floor()
         } else {
             let lot = 100.0;
-            if lot * price > self.cash { (self.cash / price).floor() } else { lot }
+            if lot * price > self.cash {
+                (self.cash / price).floor()
+            } else {
+                lot
+            }
         }
     }
 }
 
 impl BacktestEngine {
     fn execute_signal(&mut self, symbol: &str, bar: &Bar, signal: &TradeSignal) {
-        if self.daily_trades >= self.config.risk.max_daily_trades { return; }
+        if self.daily_trades >= self.config.risk.max_daily_trades {
+            return;
+        }
         if self.positions.len() >= self.config.risk.max_open_positions
-            && !self.positions.contains_key(symbol) { return; }
+            && !self.positions.contains_key(symbol)
+        {
+            return;
+        }
         let equity = self.current_equity(bar.close);
 
         if signal.signal == SIGNAL_BUY && !self.positions.contains_key(symbol) {
@@ -189,12 +234,25 @@ impl BacktestEngine {
                 let cost = fill * qty + self.config.commission_per_trade;
                 if cost <= self.cash {
                     self.cash -= cost;
-                    self.positions.insert(symbol.to_string(), SimPosition {
-                        symbol: symbol.to_string(), qty, avg_price: fill,
-                        entry_bar: self.bars_processed,
-                    });
-                    self.record_trade(symbol, TradeSide::Buy, qty, bar.close, fill,
-                        &signal.reasoning, signal.confidence.unwrap_or(0.0), bar.timestamp);
+                    self.positions.insert(
+                        symbol.to_string(),
+                        SimPosition {
+                            symbol: symbol.to_string(),
+                            qty,
+                            avg_price: fill,
+                            entry_bar: self.bars_processed,
+                        },
+                    );
+                    self.record_trade(
+                        symbol,
+                        TradeSide::Buy,
+                        qty,
+                        bar.close,
+                        fill,
+                        &signal.reasoning,
+                        signal.confidence.unwrap_or(0.0),
+                        bar.timestamp,
+                    );
                     self.daily_trades += 1;
                 }
             }
@@ -213,52 +271,88 @@ impl BacktestEngine {
         if let Some(pos) = self.positions.remove(symbol) {
             let proceeds = fill_price * pos.qty - self.config.commission_per_trade;
             self.cash += proceeds;
-            let realized_pnl = (fill_price - pos.avg_price) * pos.qty
-                - self.config.commission_per_trade * 2.0;
+            let realized_pnl =
+                (fill_price - pos.avg_price) * pos.qty - self.config.commission_per_trade * 2.0;
             let id = self.next_trade_id;
             self.next_trade_id += 1;
             self.trades.push(TradeRecord {
-                id, symbol: symbol.to_string(), side: TradeSide::Sell,
-                qty: pos.qty, signal_price: fill_price + self.config.slippage_per_share,
-                fill_price, slippage: -self.config.slippage_per_share,
+                id,
+                symbol: symbol.to_string(),
+                side: TradeSide::Sell,
+                qty: pos.qty,
+                signal_price: fill_price + self.config.slippage_per_share,
+                fill_price,
+                slippage: -self.config.slippage_per_share,
                 commission: self.config.commission_per_trade,
-                bar_timestamp: timestamp, sim_timestamp: Utc::now(),
-                reasoning: reason.to_string(), confidence: 0.0,
+                bar_timestamp: timestamp,
+                sim_timestamp: Utc::now(),
+                reasoning: reason.to_string(),
+                confidence: 0.0,
                 realized_pnl: Some(realized_pnl),
             });
         }
     }
 
-    fn record_trade(&mut self, symbol: &str, side: TradeSide, qty: f64,
-        signal_price: f64, fill_price: f64, reason: &str, confidence: f64, timestamp: i64) {
+    fn record_trade(
+        &mut self,
+        symbol: &str,
+        side: TradeSide,
+        qty: f64,
+        signal_price: f64,
+        fill_price: f64,
+        reason: &str,
+        confidence: f64,
+        timestamp: i64,
+    ) {
         let id = self.next_trade_id;
         self.next_trade_id += 1;
         self.trades.push(TradeRecord {
-            id, symbol: symbol.to_string(), side, qty, signal_price, fill_price,
+            id,
+            symbol: symbol.to_string(),
+            side,
+            qty,
+            signal_price,
+            fill_price,
             slippage: self.config.slippage_per_share,
             commission: self.config.commission_per_trade,
-            bar_timestamp: timestamp, sim_timestamp: Utc::now(),
-            reasoning: reason.to_string(), confidence, realized_pnl: None,
+            bar_timestamp: timestamp,
+            sim_timestamp: Utc::now(),
+            reasoning: reason.to_string(),
+            confidence,
+            realized_pnl: None,
         });
     }
 
     fn record_equity(&mut self, timestamp: i64) {
-        let price = self.bar_buffer.last().map(|b| b.close).unwrap_or(self.config.starting_equity);
+        let price = self
+            .bar_buffer
+            .last()
+            .map(|b| b.close)
+            .unwrap_or(self.config.starting_equity);
         let equity = self.current_equity(price);
-        let peak = self.equity_curve.iter().map(|p| p.equity)
+        let peak = self
+            .equity_curve
+            .iter()
+            .map(|p| p.equity)
             .fold(self.config.starting_equity, f64::max);
         let dd = if equity < peak { peak - equity } else { 0.0 };
         let dd_pct = if peak > 0.0 { dd / peak * 100.0 } else { 0.0 };
         self.equity_curve.push(EquityPoint {
-            bar_timestamp: timestamp, equity, drawdown: dd, drawdown_pct: dd_pct,
+            bar_timestamp: timestamp,
+            equity,
+            drawdown: dd,
+            drawdown_pct: dd_pct,
             open_positions: self.positions.len(),
         });
     }
 
     fn build_report(&self, symbol: &str) -> BacktestReport {
         BacktestReport::from_trades(
-            symbol, self.bars_processed, self.trades.clone(),
-            self.equity_curve.clone(), self.config.starting_equity,
+            symbol,
+            self.bars_processed,
+            self.trades.clone(),
+            self.equity_curve.clone(),
+            self.config.starting_equity,
         )
     }
 }

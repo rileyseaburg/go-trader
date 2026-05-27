@@ -10,26 +10,26 @@
 //! - ADX (Average Directional Index)
 //! - Stochastic Oscillator (%K / %D)
 
-mod types;
+mod adx;
+mod atr;
+mod bollinger;
+mod builder;
+mod composite;
+mod macd;
 mod moving_average;
 mod rsi;
-mod macd;
-mod bollinger;
-mod atr;
-mod vwap;
-mod adx;
 mod stochastic;
-mod composite;
-mod builder;
+mod types;
+mod vwap;
 
-pub use types::*;
-pub use moving_average::{sma, ema};
-pub use rsi::rsi;
-pub use macd::{macd, MacdResult};
-pub use bollinger::{bollinger_bands, BollingerResult};
-pub use atr::atr;
-pub use vwap::vwap;
 pub use adx::{adx, AdxResult};
-pub use stochastic::{stochastic, StochasticResult};
-pub use composite::compute_all;
+pub use atr::atr;
+pub use bollinger::{bollinger_bands, BollingerResult};
 pub use builder::IndicatorSetBuilder;
+pub use composite::compute_all;
+pub use macd::{macd, MacdResult};
+pub use moving_average::{ema, sma};
+pub use rsi::rsi;
+pub use stochastic::{stochastic, StochasticResult};
+pub use types::*;
+pub use vwap::vwap;

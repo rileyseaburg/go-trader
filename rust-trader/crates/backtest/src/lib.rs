@@ -3,5 +3,5 @@
 pub mod engine;
 pub mod report;
 
-pub use engine::{BacktestEngine, BacktestConfig};
+pub use engine::{BacktestConfig, BacktestEngine};
 pub use report::{BacktestReport, TradeRecord, TradeSide};

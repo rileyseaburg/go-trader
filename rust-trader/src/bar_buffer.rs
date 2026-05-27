@@ -64,8 +64,7 @@ impl BarBuffer {
         let buf = buffers.entry(symbol.to_string()).or_insert_with(Vec::new);
 
         // Build a set of existing timestamps for dedup
-        let existing_ts: std::collections::HashSet<i64> =
-            buf.iter().map(|b| b.timestamp).collect();
+        let existing_ts: std::collections::HashSet<i64> = buf.iter().map(|b| b.timestamp).collect();
 
         for bar in bars {
             if !existing_ts.contains(&bar.timestamp) {
@@ -134,12 +133,7 @@ impl BarBuffer {
 
     /// List all symbols with stored bars.
     pub fn symbols(&self) -> Vec<String> {
-        self.buffers
-            .read()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect()
+        self.buffers.read().unwrap().keys().cloned().collect()
     }
 
     /// Clear all bars for a symbol.

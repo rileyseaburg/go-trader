@@ -158,7 +158,11 @@ mod tests {
             .build();
         let strategy = MomentumBreakoutStrategy::default();
         let vote = strategy.evaluate(&make_ctx(&ind));
-        assert!(vote.direction > 0.0, "expected buy, got direction={}", vote.direction);
+        assert!(
+            vote.direction > 0.0,
+            "expected buy, got direction={}",
+            vote.direction
+        );
         assert!(vote.reason.contains("volume surge"));
     }
 

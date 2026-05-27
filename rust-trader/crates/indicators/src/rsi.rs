@@ -7,10 +7,7 @@ pub fn rsi(closes: &[f64], period: usize) -> Option<f64> {
         return None;
     }
 
-    let deltas: Vec<f64> = closes
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .collect();
+    let deltas: Vec<f64> = closes.windows(2).map(|w| w[1] - w[0]).collect();
 
     // First `period` deltas used to seed average gain/loss
     let (init_gains, init_losses): (Vec<f64>, Vec<f64>) =
@@ -42,10 +39,7 @@ pub fn rsi_series(closes: &[f64], period: usize) -> Vec<Option<f64>> {
     }
     let mut result = vec![None; closes.len()];
 
-    let deltas: Vec<f64> = closes
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .collect();
+    let deltas: Vec<f64> = closes.windows(2).map(|w| w[1] - w[0]).collect();
 
     let (init_gains, init_losses): (Vec<f64>, Vec<f64>) =
         deltas[..period].iter().partition(|&&d| d > 0.0);
@@ -111,12 +105,16 @@ mod tests {
     #[test]
     fn rsi_range() {
         let closes = vec![
-            44.0, 44.15, 44.09, 43.62, 44.35, 44.84, 45.10, 45.38,
-            44.96, 45.28, 45.43, 45.56, 45.44, 45.67, 45.80, 45.19,
+            44.0, 44.15, 44.09, 43.62, 44.35, 44.84, 45.10, 45.38, 44.96, 45.28, 45.43, 45.56,
+            45.44, 45.67, 45.80, 45.19,
         ];
         let r = rsi(&closes, 14);
         assert!(r.is_some());
         let val = r.unwrap();
-        assert!(val > 0.0 && val < 100.0, "RSI should be in (0, 100), got {}", val);
+        assert!(
+            val > 0.0 && val < 100.0,
+            "RSI should be in (0, 100), got {}",
+            val
+        );
     }
 }

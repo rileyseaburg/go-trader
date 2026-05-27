@@ -50,7 +50,7 @@ spec:
             - name: GO_TRADER_MARKET_DATA_INTERVAL_SECS
               value: "1"
             - name: GO_TRADER_MARKET_DATA_INTERVAL_MS
-              value: "250"
+              value: "100"
             - name: GO_TRADER_MARKET_DATA_STREAM_ENABLED
               value: "true"
             - name: GO_TRADER_SEED_BAR_COUNT
@@ -64,11 +64,13 @@ spec:
             - name: GO_TRADER_EVENT_EVAL_INTERVAL_SECS
               value: "1"
             - name: GO_TRADER_EVENT_EVAL_INTERVAL_MS
-              value: "250"
+              value: "100"
             - name: GO_TRADER_EVENT_ORDER_COOLDOWN_SECS
               value: "15"
             - name: GO_TRADER_EVENT_ORDER_COOLDOWN_MS
-              value: "1000"
+              value: "500"
+            - name: GO_TRADER_AUTO_TRADE_MIN_CONFIDENCE
+              value: "0.50"
           ports:
             - name: http
               containerPort: 8080

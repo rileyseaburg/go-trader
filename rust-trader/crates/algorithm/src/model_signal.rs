@@ -108,7 +108,9 @@ impl ModelSignalClient {
             reasoning: format!(
                 "model={} source=external_llm; confidence={}; {}",
                 DEFAULT_ANTHROPIC_MODEL,
-                confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "unknown".to_string()),
+                confidence
+                    .map(|c| format!("{:.0}%", c * 100.0))
+                    .unwrap_or_else(|| "unknown".to_string()),
                 parsed
                     .reasoning
                     .unwrap_or_else(|| "model returned no reasoning".to_string())
