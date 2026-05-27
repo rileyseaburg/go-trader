@@ -245,9 +245,13 @@ async fn main() {
         Arc::new(RwLock::new(std::collections::HashMap::new()));
     let bar_buffer = Arc::new(BarBuffer::with_default_capacity());
 
-    // Seed bar buffer with historical bars so indicators are available immediately.
+    // Warm the indicator buffer in the background. This used to block startup,
+    // which is fine for a handful of symbols but unsafe for a broad universe:
+    // Kubernetes startup probes can kill the pod before HTTP binds. Until warmup
+    // completes, live ticks still update market data and the signal path falls
+    // back to the deterministic local engine when indicators are missing.
     if !mock_mode {
-        seed_bar_buffer(&alpaca_client, &bar_buffer, &symbols).await;
+        spawn_bar_seed_warmup(alpaca_client.clone(), bar_buffer.clone(), symbols.clone());
     } else {
         info!("Mock mode — skipping historical bar fetch");
     }
@@ -817,6 +821,21 @@ fn normalize_symbol(raw: &str) -> Option<String> {
     }
 
     Some(symbol)
+}
+
+fn spawn_bar_seed_warmup(
+    alpaca_client: AlpacaRestClient,
+    buf: Arc<BarBuffer>,
+    symbols: Vec<String>,
+) {
+    tokio::spawn(async move {
+        info!(
+            symbols = symbols.len(),
+            "Historical bar warmup started in background"
+        );
+        seed_bar_buffer(&alpaca_client, &buf, &symbols).await;
+        info!(symbols = symbols.len(), "Historical bar warmup completed");
+    });
 }
 
 /// Fetch historical 5-minute bars from Alpaca and seed the bar buffer.
