@@ -105,7 +105,7 @@ impl Strategy for TapeVelocityStrategy {
         let vol_ratio = ind.volume_ratio();
         if vol_ratio >= 1.15 {
             score *= 1.12;
-            reasons.push(format!("volume {:.2}x" , vol_ratio));
+            reasons.push(format!("volume {:.2}x", vol_ratio));
         }
         if vol_ratio >= 1.75 {
             score *= 1.10;
@@ -119,8 +119,8 @@ impl Strategy for TapeVelocityStrategy {
             reasons.push("existing position; buy velocity dampened".to_string());
         }
 
-        let confidence = (0.58 + score.abs() * 0.62).clamp(0.0, 0.97)
-            * ctx.regime_multiplier.max(0.50);
+        let confidence =
+            (0.58 + score.abs() * 0.62).clamp(0.0, 0.97) * ctx.regime_multiplier.max(0.50);
         let reason = format!(
             "tape velocity score={score:+.2}, price={price:.2}; {}",
             if reasons.is_empty() {

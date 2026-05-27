@@ -6,6 +6,7 @@ mod audit_store;
 mod bar_buffer;
 mod http_handlers;
 
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,8 @@ use crate::{
 
 const DEFAULT_PORT: &str = "8080";
 const DEFAULT_SYMBOLS: &str = "AAPL,MSFT,TSLA";
+const DEFAULT_MAX_UNIVERSE_SYMBOLS: usize = 1_000;
+const DEFAULT_ACTIVE_SYMBOL_LIMIT: usize = 75;
 const PAPER_URL: &str = "https://paper-api.alpaca.markets";
 const LIVE_URL: &str = "https://api.alpaca.markets";
 const MAX_NOTIFICATIONS: usize = 100;
@@ -51,6 +54,23 @@ struct Args {
     port: String,
     #[arg(long, default_value = DEFAULT_SYMBOLS)]
     symbols: String,
+    /// Optional newline/comma separated universe file. Comments beginning with # are ignored.
+    #[arg(long, env = "GO_TRADER_SYMBOLS_FILE")]
+    symbols_file: Option<String>,
+    /// Maximum symbols to load from CLI/env/file before safety capping.
+    #[arg(
+        long,
+        env = "GO_TRADER_MAX_UNIVERSE_SYMBOLS",
+        default_value_t = DEFAULT_MAX_UNIVERSE_SYMBOLS
+    )]
+    max_universe_symbols: usize,
+    /// Maximum active symbols subscribed/evaluated by this pod at once.
+    #[arg(
+        long,
+        env = "GO_TRADER_ACTIVE_SYMBOL_LIMIT",
+        default_value_t = DEFAULT_ACTIVE_SYMBOL_LIMIT
+    )]
+    active_symbol_limit: usize,
     #[arg(long, default_value_t = true)]
     paper: bool,
     #[arg(long)]
@@ -180,12 +200,24 @@ async fn main() {
     });
     info!("SQLite audit log initialized at {}", args.db_path);
 
-    // Parse symbols
-    let symbols: Vec<String> = args
-        .symbols
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .collect();
+    // Parse broad universe but cap the active set. Loading a full market list is
+    // useful, but this pod must not blindly subscribe/seed/trade thousands of
+    // symbols at once: Alpaca rate limits, stream limits, pod resources, and
+    // portfolio risk gates still apply.
+    let universe = load_symbol_universe(&args).unwrap_or_else(|e| {
+        error!("Failed to load symbol universe: {}", e);
+        std::process::exit(1);
+    });
+    let active_limit = args.active_symbol_limit.max(1);
+    let symbols: Vec<String> = universe.iter().take(active_limit).cloned().collect();
+    info!(
+        universe_symbols = universe.len(),
+        active_symbols = symbols.len(),
+        active_symbol_limit = active_limit,
+        max_universe_symbols = args.max_universe_symbols,
+        symbols = symbols.join(","),
+        "Symbol universe loaded; active set capped for safe live-paper trading"
+    );
 
     // Initialize components
     if args.dry_run {
@@ -715,6 +747,76 @@ fn refresh_indicators(algo: &Arc<TradingAlgorithm>, buf: &Arc<BarBuffer>, symbol
             algo.update_indicators(symbol, set);
         }
     }
+}
+
+fn load_symbol_universe(
+    args: &Args,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut raw_sources = Vec::new();
+    raw_sources.push(args.symbols.clone());
+
+    if let Some(path) = args
+        .symbols_file
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+    {
+        raw_sources.push(std::fs::read_to_string(path)?);
+    }
+
+    if let Ok(extra) = std::env::var("GO_TRADER_EXTRA_SYMBOLS") {
+        raw_sources.push(extra);
+    }
+
+    let max_universe = args.max_universe_symbols.max(1);
+    let mut seen = HashSet::new();
+    let mut symbols = Vec::new();
+
+    for source in raw_sources {
+        for token in source
+            .lines()
+            .flat_map(|line| line.split('#').next().unwrap_or_default().split(','))
+        {
+            let Some(symbol) = normalize_symbol(token) else {
+                continue;
+            };
+            if seen.insert(symbol.clone()) {
+                symbols.push(symbol);
+                if symbols.len() >= max_universe {
+                    warn!(
+                        max_universe_symbols = max_universe,
+                        "Symbol universe capped while loading; remaining symbols ignored"
+                    );
+                    return Ok(symbols);
+                }
+            }
+        }
+    }
+
+    if symbols.is_empty() {
+        return Err("symbol universe is empty after parsing".into());
+    }
+    Ok(symbols)
+}
+
+fn normalize_symbol(raw: &str) -> Option<String> {
+    let symbol = raw.trim().to_ascii_uppercase();
+    if symbol.is_empty() {
+        return None;
+    }
+
+    // Alpaca equity symbols commonly use letters, digits, dot and dash. Reject
+    // anything shell-like or whitespace-containing before it can become a stream
+    // subscription or order candidate.
+    if symbol.len() > 12
+        || !symbol
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        warn!(raw, "Ignoring invalid symbol token in configured universe");
+        return None;
+    }
+
+    Some(symbol)
 }
 
 /// Fetch historical 5-minute bars from Alpaca and seed the bar buffer.
