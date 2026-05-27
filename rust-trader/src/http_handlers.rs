@@ -140,7 +140,11 @@ async fn get_runtime_status(State(s): State<Arc<AppState>>) -> impl IntoResponse
         "LIVE_PAPER"
     };
 
+    // Keep this endpoint lock-free. It is used for health/UI smoke checks, and
+    // should remain responsive even while the trading loop is processing a broad
+    // universe and holding algorithm state locks.
     Json(serde_json::json!({
+        "status": "ok",
         "trading_mode": trading_mode,
         "mock_mode": s.mock_mode,
         "dry_run": s.dry_run,
@@ -148,9 +152,6 @@ async fn get_runtime_status(State(s): State<Arc<AppState>>) -> impl IntoResponse
         "broker": if s.mock_mode { "mock" } else { "alpaca" },
         "broker_environment": if s.base_url.contains("paper") { "paper" } else { "live_or_custom" },
         "base_url": s.base_url,
-        "algorithm_running": s.algo.is_running(),
-        "regime_name": s.algo.get_regime_name(),
-        "regime_multiplier": s.algo.get_regime_multiplier(),
     }))
 }
 async fn get_tickers(State(s): State<Arc<AppState>>) -> impl IntoResponse {
