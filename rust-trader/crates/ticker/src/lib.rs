@@ -636,19 +636,48 @@ fn parse_snapshot_bar(
     })
 }
 
+pub fn price_from_snapshot(data: &TickerData) -> Option<f64> {
+    data.trade
+        .as_ref()
+        .and_then(|trade| positive_price(trade.price))
+        .or_else(|| data.bar.as_ref().and_then(|bar| positive_price(bar.close)))
+        .or_else(|| {
+            data.quote.as_ref().and_then(|quote| {
+                match (
+                    positive_price(quote.bid_price),
+                    positive_price(quote.ask_price),
+                ) {
+                    (Some(bid), Some(ask)) => Some((bid + ask) / 2.0),
+                    (Some(bid), None) => Some(bid),
+                    (None, Some(ask)) => Some(ask),
+                    (None, None) => None,
+                }
+            })
+        })
+}
+
 pub fn change_from_snapshot(data: &TickerData) -> f64 {
-    let Some(trade) = data.trade.as_ref() else {
+    let Some(price) = price_from_snapshot(data) else {
         return 0.0;
     };
     let Some(bar) = data.bar.as_ref() else {
         return 0.0;
     };
     if bar.open > 0.0 {
-        (trade.price - bar.open) / bar.open
+        (price - bar.open) / bar.open
     } else {
         0.0
     }
 }
+
+fn positive_price(price: f64) -> Option<f64> {
+    if price.is_finite() && price > 0.0 {
+        Some(price)
+    } else {
+        None
+    }
+}
+
 fn number_field(
     obj: &serde_json::Value,
     key: &str,
@@ -691,4 +720,94 @@ fn string_field(
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .ok_or_else(|| format!("missing string Alpaca field `{}` in {}", key, obj).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ticker_data(trade: Option<Trade>, quote: Option<Quote>, bar: Option<Bar>) -> TickerData {
+        TickerData {
+            symbol: "AAPL".to_string(),
+            trade,
+            quote,
+            bar,
+            last_updated: Utc::now(),
+        }
+    }
+
+    fn trade(price: f64) -> Trade {
+        Trade {
+            price,
+            size: 1,
+            timestamp: Utc::now().to_rfc3339(),
+            exchange: "IEX".to_string(),
+        }
+    }
+
+    fn quote(bid_price: f64, ask_price: f64) -> Quote {
+        Quote {
+            bid_price,
+            bid_size: 1,
+            ask_price,
+            ask_size: 1,
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn bar(open: f64, close: f64) -> Bar {
+        Bar {
+            close,
+            high: close.max(open),
+            low: close.min(open),
+            open,
+            volume: 100,
+            timestamp: Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn price_prefers_positive_trade_price() {
+        let data = ticker_data(
+            Some(trade(101.0)),
+            Some(quote(99.0, 100.0)),
+            Some(bar(90.0, 95.0)),
+        );
+
+        assert_eq!(price_from_snapshot(&data), Some(101.0));
+    }
+
+    #[test]
+    fn price_falls_back_to_bar_close_when_trade_price_is_zero() {
+        let data = ticker_data(
+            Some(trade(0.0)),
+            Some(quote(99.0, 100.0)),
+            Some(bar(90.0, 95.0)),
+        );
+
+        assert_eq!(price_from_snapshot(&data), Some(95.0));
+    }
+
+    #[test]
+    fn price_falls_back_to_quote_mid_when_trade_and_bar_are_missing() {
+        let data = ticker_data(None, Some(quote(99.0, 101.0)), None);
+
+        assert_eq!(price_from_snapshot(&data), Some(100.0));
+    }
+
+    #[test]
+    fn price_uses_single_sided_quote_when_needed() {
+        let bid_only = ticker_data(None, Some(quote(99.0, 0.0)), None);
+        let ask_only = ticker_data(None, Some(quote(0.0, 101.0)), None);
+
+        assert_eq!(price_from_snapshot(&bid_only), Some(99.0));
+        assert_eq!(price_from_snapshot(&ask_only), Some(101.0));
+    }
+
+    #[test]
+    fn change_from_snapshot_uses_fallback_price() {
+        let data = ticker_data(Some(trade(0.0)), None, Some(bar(100.0, 110.0)));
+
+        assert!((change_from_snapshot(&data) - 0.10).abs() < f64::EPSILON);
+    }
 }

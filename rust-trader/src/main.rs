@@ -19,7 +19,9 @@ use go_trader_algorithm::{PositionData, TradingAlgorithm};
 use go_trader_backtest::{BacktestConfig, BacktestEngine};
 use go_trader_cartography::{self as cartography, Reading};
 use go_trader_notification::NotificationManager;
-use go_trader_ticker::{change_from_snapshot, DataHandler, TickerData, TickerServer};
+use go_trader_ticker::{
+    change_from_snapshot, price_from_snapshot, DataHandler, TickerData, TickerServer,
+};
 use go_trader_types::TradeSignal;
 
 use crate::{
@@ -334,7 +336,10 @@ async fn main() {
     }
     impl DataHandler for Handler {
         fn handle(&self, symbol: &str, data: &TickerData) {
-            let price = data.trade.as_ref().map(|t| t.price).unwrap_or(0.0);
+            let Some(price) = price_from_snapshot(data) else {
+                warn!(symbol, "Skipping market data update with no positive price");
+                return;
+            };
             let high = data.bar.as_ref().map(|b| b.high).unwrap_or(price * 1.05);
             let low = data.bar.as_ref().map(|b| b.low).unwrap_or(price * 0.95);
             let volume = data.bar.as_ref().map(|b| b.volume as f64).unwrap_or(1000.0);
