@@ -132,19 +132,19 @@ fn classify_regime(current: f64, direction: f64) -> Regime {
             tone: "#7f1d1d".into(),
             multiplier: 0.30,
         }
-    } else if direction > 0.05 {
+    } else if direction > 0.12 {
         Regime {
             name: "RISING WATERS".into(),
             description: "Net ascending.".into(),
             tone: "#a16207".into(),
             multiplier: 1.00,
         }
-    } else if direction < -0.05 {
+    } else if direction < -0.12 {
         Regime {
             name: "EBBING TIDE".into(),
             description: "Net descending.".into(),
             tone: "#7c2d12".into(),
-            multiplier: 0.60,
+            multiplier: 0.75,
         }
     } else {
         Regime {

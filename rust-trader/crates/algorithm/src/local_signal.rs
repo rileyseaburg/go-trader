@@ -5,7 +5,7 @@ use go_trader_types::{MarketData, TradeSignal, SIGNAL_BUY, SIGNAL_HOLD, SIGNAL_S
 
 use crate::types::{PortfolioData, RiskParameters};
 
-const DEFENSIVE_REGIME_CUTOFF: f64 = 0.70;
+const DEFENSIVE_REGIME_CUTOFF: f64 = 0.50;
 const BUY_CHANGE_THRESHOLD: f64 = 0.015;
 const SELL_CHANGE_THRESHOLD: f64 = -0.025;
 const NEUTRAL_CONFIDENCE: f64 = 0.55;
@@ -157,17 +157,39 @@ mod tests {
 
     #[test]
     fn defensive_regime_blocks_new_buys() {
+        // Only truly destructive regimes (×0.30) block new entries.
+        // EBBING TIDE at ×0.75 now passes the 0.50 cutoff.
         let engine = RuleBasedSignalEngine;
         let signal = engine.generate(
             "AAPL",
             &md(0.05),
             &PortfolioData::default(),
             &RiskParameters::default(),
-            "EBBING TIDE",
-            0.6,
+            "DESTRUCTIVE INTERFERENCE",
+            0.30,
         );
         assert_eq!(signal.signal, SIGNAL_HOLD);
         assert!(signal.reasoning.contains("defensive regime gate"));
+    }
+
+    #[test]
+    fn ebbing_tide_allows_new_buys() {
+        // EBBING TIDE at the new ×0.75 multiplier is above the 0.50 cutoff.
+        // New buys should be allowed (with regime-aware position sizing), not blocked.
+        let engine = RuleBasedSignalEngine;
+        let signal = engine.generate(
+            "AAPL",
+            &md(0.03),
+            &PortfolioData::default(),
+            &RiskParameters::default(),
+            "EBBING TIDE",
+            0.75,
+        );
+        assert_eq!(
+            signal.signal, SIGNAL_BUY,
+            "EBBING TIDE ×0.75 should allow new buys; got: {}",
+            signal.reasoning
+        );
     }
 
     #[test]

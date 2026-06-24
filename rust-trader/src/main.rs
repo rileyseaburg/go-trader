@@ -459,6 +459,21 @@ async fn main() {
         info!("Auto-trade loop disabled; use --auto-trade to enable automated paper/live order evaluation");
     }
 
+    // Background DB retention: prune old hold-only signals/decisions every hour.
+    {
+        let audit_clone = audit.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Err(e) = audit_clone.prune_old_records(7) {
+                    warn!("DB_PRUNE_FAILED: {e}");
+                }
+            }
+        });
+    }
+
     // Build and start HTTP server
     let app = http_handlers::build_router(
         api_key,
@@ -692,18 +707,36 @@ async fn evaluate_symbol_for_auto_trade_with_source(
     )>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let signal = trading_algo.process_symbol(symbol).await?;
-    let signal_id = audit.record_signal(&signal)?;
-    audit.record_decision(DecisionRecord {
-        signal_id: &signal_id,
-        action: &signal.signal,
-        reason: &signal.reasoning,
-        governance: serde_json::json!({
-            "source": source,
-            "regime_name": trading_algo.get_regime_name(),
-            "regime_multiplier": trading_algo.get_regime_multiplier(),
-            "dry_run": dry_run,
-        }),
-    })?;
+    let audit_clone = audit.clone();
+    let signal_clone = signal.clone();
+    let (signal_id, _) = tokio::task::spawn_blocking(move || {
+        let id = audit_clone.record_signal(&signal_clone)?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((id, ()))
+    })
+    .await??;
+    let signal_id = signal_id;
+
+    let audit_clone = audit.clone();
+    let signal_id_clone = signal_id.clone();
+    let signal_action = signal.signal.clone();
+    let signal_reasoning = signal.reasoning.clone();
+    let regime_name = trading_algo.get_regime_name().to_string();
+    let regime_multiplier = trading_algo.get_regime_multiplier();
+    let source_owned = source.to_string();
+    tokio::task::spawn_blocking(move || {
+        audit_clone.record_decision(DecisionRecord {
+            signal_id: &signal_id_clone,
+            action: &signal_action,
+            reason: &signal_reasoning,
+            governance: serde_json::json!({
+                "source": source_owned,
+                "regime_name": regime_name,
+                "regime_multiplier": regime_multiplier,
+                "dry_run": dry_run,
+            }),
+        })
+    })
+    .await??;
 
     if is_actionable_signal(&signal) {
         if let Some((last_order_attempt, cooldown)) = order_cooldown {

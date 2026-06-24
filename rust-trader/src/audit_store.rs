@@ -167,8 +167,10 @@ impl AuditStore {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+        conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
         };
@@ -252,6 +254,31 @@ impl AuditStore {
             "#,
         )?;
         Ok(())
+    }
+
+    /// Delete hold-only signals and decisions older than `days` to prevent unbounded DB growth.
+    /// Buy/sell signals are preserved for forensic audit. Orders, fills, and regime states
+    /// are small tables and are never pruned.
+    /// Returns (deleted_signals, deleted_decisions).
+    pub fn prune_old_records(
+        &self,
+        days: u32,
+    ) -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+        let cutoff = Utc::now() - chrono::Duration::days(days as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        let deleted_signals = conn.execute(
+            "DELETE FROM signals WHERE created_at < ?1 AND signal = 'hold'",
+            params![cutoff_str],
+        )?;
+        let deleted_decisions = conn.execute(
+            "DELETE FROM decisions WHERE created_at < ?1 AND action = 'hold'",
+            params![cutoff_str],
+        )?;
+        tracing::info!(
+            "pruned {deleted_signals} old hold signals and {deleted_decisions} old hold decisions older than {days} days"
+        );
+        Ok((deleted_signals, deleted_decisions))
     }
 
     pub fn record_signal(
