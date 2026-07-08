@@ -95,6 +95,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 dotenvy.workspace = true
-rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true

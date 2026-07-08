@@ -173,8 +173,9 @@ impl TradingAlgorithm {
             None => {
                 // Use multi-strategy arbitrator when indicator data is available,
                 // otherwise fall back to the simple rule-based engine.
-                let indicators = self.indicators.read().unwrap();
-                if let Some(ind_set) = indicators.get(symbol) {
+                // Clone the indicator set so we don't hold the read lock during signal generation.
+                let ind_set = self.indicators.read().unwrap().get(symbol).cloned();
+                if let Some(ind_set) = ind_set {
                     self.arbitrator.generate_signal(
                         symbol,
                         &md,
@@ -182,7 +183,7 @@ impl TradingAlgorithm {
                         &risk,
                         &regime_name,
                         regime_multiplier,
-                        ind_set,
+                        &ind_set,
                     )
                 } else {
                     self.local_signal_engine.generate(

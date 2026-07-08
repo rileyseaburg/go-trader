@@ -45,7 +45,11 @@ impl AlpacaRestClient {
             api_secret,
             base_url,
             data_url: DATA_BASE_URL.to_string(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             audit: None,
             dry_run: false,
         }

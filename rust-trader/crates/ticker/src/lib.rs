@@ -85,7 +85,11 @@ impl TickerServer {
             handler: Arc::new(RwLock::new(None)),
             mock_mode: mock,
             running: Arc::new(RwLock::new(false)),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             poll_interval: market_data_poll_interval(),
         }
     }
