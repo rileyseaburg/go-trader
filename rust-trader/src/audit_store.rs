@@ -13,13 +13,16 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use postgres::{Client, NoTls, Row};
+use postgres::{Client, Config, NoTls, Row};
 use serde::Serialize;
 use uuid::Uuid;
 
 use go_trader_types::TradeSignal;
 
-const DEFAULT_DATABASE_URL: &str = "postgres://postgres:postgres@192.168.50.70/postgres";
+const DEFAULT_PGHOST: &str = "192.168.50.70";
+const DEFAULT_PGUSER: &str = "postgres";
+const DEFAULT_PGDATABASE: &str = "postgres";
+const DEFAULT_PGPASSWORD: &str = "postgres";
 
 type AuditResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -169,13 +172,8 @@ pub struct FillRecord<'a> {
 
 impl AuditStore {
     pub fn open(_legacy_path: impl AsRef<std::path::Path>) -> AuditResult<Self> {
-        let database_url = std::env::var("GO_TRADER_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .or_else(|_| std::env::var("POSTGRES_URL"))
-            .unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-
         let store = std::thread::spawn(move || -> AuditResult<Self> {
-            let mut client = Client::connect(&database_url, NoTls)?;
+            let mut client = connect_client()?;
             migrate_client(&mut client)?;
             Ok(Self {
                 client: Arc::new(Mutex::new(client)),
@@ -393,6 +391,33 @@ impl AuditStore {
             })
         })
     }
+}
+
+fn connect_client() -> AuditResult<Client> {
+    if let Ok(database_url) = std::env::var("GO_TRADER_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .or_else(|_| std::env::var("POSTGRES_URL"))
+    {
+        return Ok(Client::connect(&database_url, NoTls)?);
+    }
+
+    let host = std::env::var("PGHOST").unwrap_or_else(|_| DEFAULT_PGHOST.to_string());
+    let user = std::env::var("PGUSER").unwrap_or_else(|_| DEFAULT_PGUSER.to_string());
+    let database = std::env::var("PGDATABASE").unwrap_or_else(|_| DEFAULT_PGDATABASE.to_string());
+    let password = std::env::var("PGPASSWORD").unwrap_or_else(|_| DEFAULT_PGPASSWORD.to_string());
+    let port = std::env::var("PGPORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(5432);
+
+    let mut config = Config::new();
+    config
+        .host(&host)
+        .port(port)
+        .user(&user)
+        .password(&password)
+        .dbname(&database);
+    Ok(config.connect(NoTls)?)
 }
 
 fn migrate_client(client: &mut Client) -> Result<(), postgres::Error> {

@@ -194,13 +194,10 @@ async fn main() {
     );
 
     let audit = AuditStore::open(&args.db_path).unwrap_or_else(|e| {
-        error!(
-            "Failed to initialize SQLite audit log at {}: {}",
-            args.db_path, e
-        );
+        error!("Failed to initialize Postgres audit store: {}", e);
         std::process::exit(1);
     });
-    info!("SQLite audit log initialized at {}", args.db_path);
+    info!("Postgres audit store initialized");
 
     // Parse broad universe but cap the active set. Loading a full market list is
     // useful, but this pod must not blindly subscribe/seed/trade thousands of
