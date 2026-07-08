@@ -4,6 +4,11 @@
 //! `--db-path` argument is accepted for CLI compatibility, but the connection target is
 //! selected from `GO_TRADER_DATABASE_URL`, `DATABASE_URL`, `POSTGRES_URL`, or the project
 //! default Postgres instance.
+//!
+//! The `postgres` crate is synchronous and internally starts a Tokio runtime, so every
+//! connection/query is executed on a plain OS thread. This preserves the existing sync
+//! API surface while avoiding "Cannot start a runtime from within a runtime" panics when
+//! called from the app's async Tokio runtime.
 
 use std::sync::{Arc, Mutex};
 
@@ -169,92 +174,32 @@ impl AuditStore {
             .or_else(|_| std::env::var("POSTGRES_URL"))
             .unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
 
-        let client = Client::connect(&database_url, NoTls)?;
-        let store = Self {
-            client: Arc::new(Mutex::new(client)),
-        };
-        store.migrate()?;
+        let store = std::thread::spawn(move || -> AuditResult<Self> {
+            let mut client = Client::connect(&database_url, NoTls)?;
+            migrate_client(&mut client)?;
+            Ok(Self {
+                client: Arc::new(Mutex::new(client)),
+            })
+        })
+        .join()
+        .map_err(|_| "Postgres audit connection thread panicked")??;
+
         tracing::info!("AuditStore connected to Postgres audit database");
         Ok(store)
     }
 
-    fn migrate(&self) -> AuditResult<()> {
-        let mut client = self.client.lock().unwrap();
-        client.batch_execute(
-            r#"
-            CREATE TABLE IF NOT EXISTS signals (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                signal TEXT NOT NULL,
-                order_type TEXT NOT NULL,
-                limit_price DOUBLE PRECISION,
-                reasoning TEXT NOT NULL,
-                confidence DOUBLE PRECISION,
-                market_data_json JSONB,
-                portfolio_json JSONB,
-                claude_input_json JSONB,
-                claude_output_json JSONB NOT NULL,
-                raw_json JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_signals_symbol_created_at ON signals(symbol, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS decisions (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                signal_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                governance_json JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_decisions_signal_id ON decisions(signal_id);
-            CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS orders (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                alpaca_order_id TEXT,
-                signal_id TEXT,
-                symbol TEXT,
-                side TEXT,
-                qty DOUBLE PRECISION,
-                order_type TEXT,
-                time_in_force TEXT,
-                limit_price DOUBLE PRECISION,
-                status TEXT,
-                source TEXT NOT NULL,
-                raw_json JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_orders_alpaca_order_id ON orders(alpaca_order_id);
-            CREATE INDEX IF NOT EXISTS idx_orders_signal_id ON orders(signal_id);
-            CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS fills (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                alpaca_order_id TEXT,
-                trade_id TEXT,
-                symbol TEXT,
-                side TEXT,
-                qty DOUBLE PRECISION,
-                price DOUBLE PRECISION,
-                raw_json JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_fills_alpaca_order_id ON fills(alpaca_order_id);
-            CREATE INDEX IF NOT EXISTS idx_fills_created_at ON fills(created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS regime_states (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                regime_name TEXT NOT NULL,
-                multiplier DOUBLE PRECISION NOT NULL,
-                reading_json JSONB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_regime_states_created_at ON regime_states(created_at DESC);
-            "#,
-        )?;
-        Ok(())
+    fn with_client<T, F>(&self, f: F) -> AuditResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Client) -> AuditResult<T> + Send + 'static,
+    {
+        let client = self.client.clone();
+        std::thread::spawn(move || {
+            let mut client = client.lock().unwrap();
+            f(&mut client)
+        })
+        .join()
+        .map_err(|_| "Postgres audit worker thread panicked")?
     }
 
     /// Delete hold-only signals and decisions older than `days` to prevent unbounded DB growth.
@@ -263,73 +208,116 @@ impl AuditStore {
     /// Returns (deleted_signals, deleted_decisions).
     pub fn prune_old_records(&self, days: u32) -> AuditResult<(usize, usize)> {
         let cutoff = (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
-        let mut client = self.client.lock().unwrap();
-        let deleted_signals = client.execute(
-            "DELETE FROM signals WHERE created_at < $1 AND signal = 'hold'",
-            &[&cutoff],
-        )? as usize;
-        let deleted_decisions = client.execute(
-            "DELETE FROM decisions WHERE created_at < $1 AND action = 'hold'",
-            &[&cutoff],
-        )? as usize;
-        tracing::info!(
-            "pruned {deleted_signals} old hold signals and {deleted_decisions} old hold decisions older than {days} days"
-        );
-        Ok((deleted_signals, deleted_decisions))
+        self.with_client(move |client| {
+            let deleted_signals = client.execute(
+                "DELETE FROM signals WHERE created_at < $1 AND signal = 'hold'",
+                &[&cutoff],
+            )? as usize;
+            let deleted_decisions = client.execute(
+                "DELETE FROM decisions WHERE created_at < $1 AND action = 'hold'",
+                &[&cutoff],
+            )? as usize;
+            tracing::info!(
+                "pruned {deleted_signals} old hold signals and {deleted_decisions} old hold decisions older than {days} days"
+            );
+            Ok((deleted_signals, deleted_decisions))
+        })
     }
 
     pub fn record_signal(&self, signal: &TradeSignal) -> AuditResult<String> {
         let id = Uuid::new_v4().to_string();
-        let raw = serde_json::to_value(signal)?;
         let created_at = signal.timestamp.to_rfc3339();
-        let mut client = self.client.lock().unwrap();
-        client.execute(
-            "INSERT INTO signals (id, created_at, symbol, signal, order_type, limit_price, reasoning, confidence, claude_output_json, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            &[&id, &created_at, &signal.symbol, &signal.signal, &signal.order_type, &signal.limit_price, &signal.reasoning, &signal.confidence, &raw, &raw],
-        )?;
+        let symbol = signal.symbol.clone();
+        let action = signal.signal.clone();
+        let order_type = signal.order_type.clone();
+        let limit_price = signal.limit_price;
+        let reasoning = signal.reasoning.clone();
+        let confidence = signal.confidence;
+        let raw = serde_json::to_value(signal)?;
+        let id_for_insert = id.clone();
+        self.with_client(move |client| {
+            client.execute(
+                "INSERT INTO signals (id, created_at, symbol, signal, order_type, limit_price, reasoning, confidence, claude_output_json, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                &[&id_for_insert, &created_at, &symbol, &action, &order_type, &limit_price, &reasoning, &confidence, &raw, &raw],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
     pub fn latest_signal_id(&self, symbol: &str) -> AuditResult<Option<String>> {
-        let mut client = self.client.lock().unwrap();
-        Ok(client
-            .query_opt(
-                "SELECT id FROM signals WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1",
-                &[&symbol],
-            )?
-            .map(|row| row.get(0)))
+        let symbol = symbol.to_string();
+        self.with_client(move |client| {
+            Ok(client
+                .query_opt(
+                    "SELECT id FROM signals WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1",
+                    &[&symbol],
+                )?
+                .map(|row| row.get(0)))
+        })
     }
 
     pub fn record_decision(&self, decision: DecisionRecord<'_>) -> AuditResult<String> {
         let id = Uuid::new_v4().to_string();
+        let id_for_insert = id.clone();
         let created_at = Utc::now().to_rfc3339();
-        let mut client = self.client.lock().unwrap();
-        client.execute(
-            "INSERT INTO decisions (id, created_at, signal_id, action, reason, governance_json) VALUES ($1,$2,$3,$4,$5,$6)",
-            &[&id, &created_at, &decision.signal_id, &decision.action, &decision.reason, &decision.governance],
-        )?;
+        let signal_id = decision.signal_id.to_string();
+        let action = decision.action.to_string();
+        let reason = decision.reason.to_string();
+        let governance = decision.governance;
+        self.with_client(move |client| {
+            client.execute(
+                "INSERT INTO decisions (id, created_at, signal_id, action, reason, governance_json) VALUES ($1,$2,$3,$4,$5,$6)",
+                &[&id_for_insert, &created_at, &signal_id, &action, &reason, &governance],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
     pub fn record_order(&self, order: OrderRecord<'_>) -> AuditResult<String> {
         let id = Uuid::new_v4().to_string();
+        let id_for_insert = id.clone();
         let created_at = Utc::now().to_rfc3339();
-        let mut client = self.client.lock().unwrap();
-        client.execute(
-            "INSERT INTO orders (id, created_at, alpaca_order_id, signal_id, symbol, side, qty, order_type, time_in_force, limit_price, status, source, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-            &[&id, &created_at, &order.alpaca_order_id, &order.signal_id, &order.symbol, &order.side, &order.qty, &order.order_type, &order.time_in_force, &order.limit_price, &order.status, &order.source, &order.raw],
-        )?;
+        let alpaca_order_id = order.alpaca_order_id.map(str::to_string);
+        let signal_id = order.signal_id.map(str::to_string);
+        let symbol = order.symbol.map(str::to_string);
+        let side = order.side.map(str::to_string);
+        let qty = order.qty;
+        let order_type = order.order_type.map(str::to_string);
+        let time_in_force = order.time_in_force.map(str::to_string);
+        let limit_price = order.limit_price;
+        let status = order.status.map(str::to_string);
+        let source = order.source.to_string();
+        let raw = order.raw;
+        self.with_client(move |client| {
+            client.execute(
+                "INSERT INTO orders (id, created_at, alpaca_order_id, signal_id, symbol, side, qty, order_type, time_in_force, limit_price, status, source, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+                &[&id_for_insert, &created_at, &alpaca_order_id, &signal_id, &symbol, &side, &qty, &order_type, &time_in_force, &limit_price, &status, &source, &raw],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
     pub fn record_fill(&self, fill: FillRecord<'_>) -> AuditResult<String> {
         let id = Uuid::new_v4().to_string();
+        let id_for_insert = id.clone();
         let created_at = Utc::now().to_rfc3339();
-        let mut client = self.client.lock().unwrap();
-        client.execute(
-            "INSERT INTO fills (id, created_at, alpaca_order_id, trade_id, symbol, side, qty, price, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-            &[&id, &created_at, &fill.alpaca_order_id, &fill.trade_id, &fill.symbol, &fill.side, &fill.qty, &fill.price, &fill.raw],
-        )?;
+        let alpaca_order_id = fill.alpaca_order_id.map(str::to_string);
+        let trade_id = fill.trade_id.map(str::to_string);
+        let symbol = fill.symbol.map(str::to_string);
+        let side = fill.side.map(str::to_string);
+        let qty = fill.qty;
+        let price = fill.price;
+        let raw = fill.raw;
+        self.with_client(move |client| {
+            client.execute(
+                "INSERT INTO fills (id, created_at, alpaca_order_id, trade_id, symbol, side, qty, price, raw_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                &[&id_for_insert, &created_at, &alpaca_order_id, &trade_id, &symbol, &side, &qty, &price, &raw],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
@@ -341,13 +329,17 @@ impl AuditStore {
         reading: &T,
     ) -> AuditResult<String> {
         let id = Uuid::new_v4().to_string();
+        let id_for_insert = id.clone();
         let created_at = created_at.to_rfc3339();
+        let name = name.to_string();
         let reading = serde_json::to_value(reading)?;
-        let mut client = self.client.lock().unwrap();
-        client.execute(
-            "INSERT INTO regime_states (id, created_at, regime_name, multiplier, reading_json) VALUES ($1,$2,$3,$4,$5)",
-            &[&id, &created_at, &name, &multiplier, &reading],
-        )?;
+        self.with_client(move |client| {
+            client.execute(
+                "INSERT INTO regime_states (id, created_at, regime_name, multiplier, reading_json) VALUES ($1,$2,$3,$4,$5)",
+                &[&id_for_insert, &created_at, &name, &multiplier, &reading],
+            )?;
+            Ok(())
+        })?;
         Ok(id)
     }
 
@@ -359,6 +351,7 @@ impl AuditStore {
     ) -> AuditResult<Vec<serde_json::Value>> {
         let limit = i64::try_from(limit.clamp(1, 500)).unwrap_or(500);
         let columns = table.columns();
+        let since = since.map(str::to_string);
         let sql = if since.is_some() {
             format!(
                 "SELECT {} FROM {} WHERE created_at >= $1 ORDER BY created_at DESC LIMIT $2",
@@ -373,31 +366,110 @@ impl AuditStore {
             )
         };
 
-        let mut client = self.client.lock().unwrap();
-        let rows = if let Some(since) = since {
-            client.query(&sql, &[&since, &limit])?
-        } else {
-            client.query(&sql, &[&limit])?
-        };
+        self.with_client(move |client| {
+            let rows = if let Some(since) = since {
+                client.query(&sql, &[&since, &limit])?
+            } else {
+                client.query(&sql, &[&limit])?
+            };
 
-        rows.iter()
-            .map(|row| row_to_json(row, columns))
-            .collect::<AuditResult<Vec<_>>>()
+            rows.iter()
+                .map(|row| row_to_json(row, columns))
+                .collect::<AuditResult<Vec<_>>>()
+        })
     }
 
     pub fn summary(&self) -> AuditResult<AuditSummary> {
-        let mut client = self.client.lock().unwrap();
-        Ok(AuditSummary {
-            signals: count_table(&mut client, "signals")?,
-            decisions: count_table(&mut client, "decisions")?,
-            orders: count_table(&mut client, "orders")?,
-            fills: count_table(&mut client, "fills")?,
-            regime_states: count_table(&mut client, "regime_states")?,
-            latest_signal_at: latest_created_at(&mut client, "signals")?,
-            latest_order_at: latest_created_at(&mut client, "orders")?,
-            latest_fill_at: latest_created_at(&mut client, "fills")?,
+        self.with_client(move |client| {
+            Ok(AuditSummary {
+                signals: count_table(client, "signals")?,
+                decisions: count_table(client, "decisions")?,
+                orders: count_table(client, "orders")?,
+                fills: count_table(client, "fills")?,
+                regime_states: count_table(client, "regime_states")?,
+                latest_signal_at: latest_created_at(client, "signals")?,
+                latest_order_at: latest_created_at(client, "orders")?,
+                latest_fill_at: latest_created_at(client, "fills")?,
+            })
         })
     }
+}
+
+fn migrate_client(client: &mut Client) -> Result<(), postgres::Error> {
+    client.batch_execute(
+        r#"
+        CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            order_type TEXT NOT NULL,
+            limit_price DOUBLE PRECISION,
+            reasoning TEXT NOT NULL,
+            confidence DOUBLE PRECISION,
+            market_data_json JSONB,
+            portfolio_json JSONB,
+            claude_input_json JSONB,
+            claude_output_json JSONB NOT NULL,
+            raw_json JSONB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signals_symbol_created_at ON signals(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS decisions (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            signal_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            governance_json JSONB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_decisions_signal_id ON decisions(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS orders (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            alpaca_order_id TEXT,
+            signal_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            qty DOUBLE PRECISION,
+            order_type TEXT,
+            time_in_force TEXT,
+            limit_price DOUBLE PRECISION,
+            status TEXT,
+            source TEXT NOT NULL,
+            raw_json JSONB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_orders_alpaca_order_id ON orders(alpaca_order_id);
+        CREATE INDEX IF NOT EXISTS idx_orders_signal_id ON orders(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS fills (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            alpaca_order_id TEXT,
+            trade_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            qty DOUBLE PRECISION,
+            price DOUBLE PRECISION,
+            raw_json JSONB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_fills_alpaca_order_id ON fills(alpaca_order_id);
+        CREATE INDEX IF NOT EXISTS idx_fills_created_at ON fills(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS regime_states (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            regime_name TEXT NOT NULL,
+            multiplier DOUBLE PRECISION NOT NULL,
+            reading_json JSONB NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_regime_states_created_at ON regime_states(created_at DESC);
+        "#,
+    )
 }
 
 fn row_to_json(row: &Row, columns: &[&str]) -> AuditResult<serde_json::Value> {
