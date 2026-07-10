@@ -119,6 +119,14 @@ impl AlpacaRestClient {
         &self,
         order: &AlpacaOrderRequest,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        if !order.qty.is_finite() || order.qty <= 0.0 {
+            return Err(format!(
+                "refusing to submit {} order for {} with invalid quantity {}",
+                order.side, order.symbol, order.qty
+            )
+            .into());
+        }
+
         let body = serde_json::json!({
             "symbol": order.symbol, "side": order.side, "type": order.order_type,
             "time_in_force": order.time_in_force, "qty": order.qty.to_string(),
@@ -374,4 +382,36 @@ where
     })
     .join()
     .map_err(|_| "Alpaca blocking bridge thread panicked")?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn place_order_raw_rejects_invalid_quantities_before_submission() {
+        let client = AlpacaRestClient::new(
+            "test-key".to_string(),
+            "test-secret".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        )
+        .with_dry_run(true);
+
+        for quantity in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let request = AlpacaOrderRequest {
+                symbol: "RKLB".to_string(),
+                side: "sell".to_string(),
+                qty: quantity,
+                order_type: "market".to_string(),
+                time_in_force: "day".to_string(),
+                limit_price: None,
+            };
+
+            let error = client.place_order_raw(&request).await.unwrap_err();
+            assert!(
+                error.to_string().contains("invalid quantity"),
+                "unexpected error for quantity {quantity}: {error}"
+            );
+        }
+    }
 }

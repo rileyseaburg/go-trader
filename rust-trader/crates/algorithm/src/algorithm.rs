@@ -13,6 +13,20 @@ use crate::local_signal::RuleBasedSignalEngine;
 use crate::strategy::Arbitrator;
 use crate::types::*;
 
+fn validated_order_quantity(
+    side: &str,
+    symbol: &str,
+    quantity: f64,
+) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+    if !quantity.is_finite() || quantity <= 0.0 {
+        return Err(format!(
+            "{side} order quantity for {symbol} must be finite and greater than zero; calculated {quantity}"
+        )
+        .into());
+    }
+    Ok(quantity)
+}
+
 pub struct TradingAlgorithm {
     claude_client: Option<Box<dyn ClaudeClient>>,
     local_signal_engine: RuleBasedSignalEngine,
@@ -301,13 +315,14 @@ impl TradingAlgorithm {
         match signal.signal.as_str() {
             "buy" => {
                 let price = signal.limit_price.unwrap_or(0.0);
-                if price <= 0.0 {
+                if !price.is_finite() || price <= 0.0 {
                     return Err("invalid price for buy order".into());
                 }
-                let shares = (position_value / price).floor();
-                if shares <= 0.0 {
-                    return Err("calculated position size too small".into());
-                }
+                let shares = validated_order_quantity(
+                    "buy",
+                    &signal.symbol,
+                    (position_value / price).floor(),
+                )?;
                 let req = AlpacaOrderRequest {
                     symbol: signal.symbol.clone(),
                     side: "buy".into(),
@@ -324,10 +339,11 @@ impl TradingAlgorithm {
             }
             "sell" => {
                 let pos = client.get_position(&signal.symbol)?;
+                let shares = validated_order_quantity("sell", &signal.symbol, pos.qty)?;
                 let req = AlpacaOrderRequest {
                     symbol: signal.symbol.clone(),
                     side: "sell".into(),
-                    qty: pos.qty,
+                    qty: shares,
                     order_type: signal.order_type.clone(),
                     time_in_force: "day".into(),
                     limit_price: signal.limit_price,
@@ -343,5 +359,110 @@ impl TradingAlgorithm {
                 signal.signal
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct MockAlpacaClient {
+        position_qty: f64,
+        place_order_calls: Arc<AtomicUsize>,
+    }
+
+    impl AlpacaClient for MockAlpacaClient {
+        fn get_account(&self) -> Result<AlpacaAccount, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(AlpacaAccount {
+                cash: 10_000.0,
+                equity: 10_000.0,
+                portfolio_value: 10_000.0,
+            })
+        }
+
+        fn get_position(
+            &self,
+            symbol: &str,
+        ) -> Result<AlpacaPosition, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(AlpacaPosition {
+                symbol: symbol.to_string(),
+                qty: self.position_qty,
+                avg_entry_price: 1.0,
+                market_value: self.position_qty,
+                unrealized_pl: 0.0,
+                unrealized_plpc: 0.0,
+            })
+        }
+
+        fn place_order(
+            &self,
+            request: AlpacaOrderRequest,
+        ) -> Result<AlpacaOrder, Box<dyn std::error::Error + Send + Sync>> {
+            assert!(request.qty.is_finite() && request.qty > 0.0);
+            self.place_order_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(AlpacaOrder {
+                id: "mock-order".to_string(),
+                status: "accepted".to_string(),
+                filled_avg_price: None,
+            })
+        }
+
+        fn get_positions(
+            &self,
+        ) -> Result<Vec<AlpacaPosition>, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn sell_signal() -> TradeSignal {
+        TradeSignal {
+            symbol: "RKLB".to_string(),
+            signal: "sell".to_string(),
+            order_type: "market".to_string(),
+            limit_price: None,
+            timestamp: Utc::now(),
+            reasoning: "test sell".to_string(),
+            confidence: Some(1.0),
+            audit: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_sell_quantities_never_reach_broker() {
+        for quantity in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let algorithm = TradingAlgorithm::new().with_alpaca(Box::new(MockAlpacaClient {
+                position_qty: quantity,
+                place_order_calls: calls.clone(),
+            }));
+
+            let error = algorithm.execute_trade(&sell_signal()).await.unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("must be finite and greater than zero"),
+                "unexpected error for quantity {quantity}: {error}"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn positive_sell_quantity_reaches_broker_once() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let algorithm = TradingAlgorithm::new().with_alpaca(Box::new(MockAlpacaClient {
+            position_qty: 3.5,
+            place_order_calls: calls.clone(),
+        }));
+
+        let message = algorithm.execute_trade(&sell_signal()).await.unwrap();
+
+        assert!(message.contains("mock-order"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }
